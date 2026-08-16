@@ -1,84 +1,109 @@
 # opencode-chrome
 
-Puente MCP que deja a opencode controlar tu Chrome real (con sesiones logueadas)
-a través de una extensión delgada. El patrón: opencode habla MCP por stdio con
-este bin, el bin expone un WebSocket local en `127.0.0.1:9223`, y la extensión
-Chrome MV3 se conecta a ese WS y ejecuta las acciones via Chrome DevTools
-Protocol. Sin backend, sin credenciales en la extensión (BYOK: las keys viven
-en la config de opencode).
+Let [opencode](https://opencode.ai) drive your real Chrome: your logged-in
+sessions, your cookies, your tabs. An unofficial, community-built bridge in
+the spirit of Claude in Chrome / Codex in Chrome.
 
-## Instalación
+> **Unofficial.** Not affiliated with or endorsed by the opencode project.
+> BYOK: your model keys stay in your opencode config. This bridge collects
+> nothing and talks only to localhost.
 
-1. Instalá y ejecutá el puente (queda escuchando en `ws://127.0.0.1:9223`):
+## How it works
 
-   ```sh
-   npm install -g opencode-chrome
-   ```
+```
+opencode (terminal, your keys)
+   │ MCP stdio
+opencode-chrome (npm bridge)         ← MCP server + WebSocket on 127.0.0.1:9223
+   │ WebSocket
+opencode-chrome (extension)          ← MV3 service worker
+   │ chrome.debugger (CDP)
+your real Chrome
+```
 
-   O usalo directo desde opencode sin instalación (ver paso 3).
+No backend, no accounts. The extension connects to the bridge on localhost
+and executes browser tools over the Chrome DevTools Protocol.
 
-2. Cargá la extensión: andá a `chrome://extensions`, activá "Developer mode",
-   "Load unpacked" y seleccioná la carpeta `extension/` de este repo. El badge
-   de la extensión se pone verde cuando conecta con el puente (gris mientras
-   reconecta cada 3s).
+## Install
 
-3. Registrá el servidor MCP en tu `opencode.json`:
+**1. Extension** — download the repo (or the [latest
+release](../../releases)), open `chrome://extensions`, enable Developer
+mode, "Load unpacked", select the `extension/` folder. The toolbar badge
+shows `off` until the bridge is running.
 
-   ```json
-   {
-     "mcp": {
-       "chrome": {
-         "type": "local",
-         "command": ["npx", "-y", "opencode-chrome"]
-       }
-     }
-   }
-   ```
+**2. Bridge** — add to your opencode config (`opencode.json`):
+
+```json
+{
+  "mcp": {
+    "chrome": { "type": "local", "command": ["npx", "-y", "opencode-chrome"] }
+  }
+}
+```
+
+**3. Use it** — restart opencode, then ask away: *"open gmail and list my
+unread senders"*, *"go to the staging site and screenshot the checkout
+form"*.
 
 ## Tools
 
-| tool | args | qué hace |
-|---|---|---|
-| `list_tabs` | | pestañas abiertas con id, título y url |
-| `new_tab` | `url?` | abre pestaña nueva (activa) |
-| `close_tab` | `id` | cierra la pestaña |
-| `activate_tab` | `id` | enfoca la pestaña |
-| `navigate` | `url, tabId?` | navega y espera la carga |
-| `snapshot` | `tabId?` | árbol de accesibilidad en texto con marcadores `[ref]` |
-| `click` | `ref, tabId?` | clickea el elemento con ese ref del último snapshot |
-| `type` | `ref, text, tabId?` | escribe texto en el elemento; `\n` manda Enter |
-| `screenshot` | `tabId?` | PNG en base64 |
-| `wait_for` | `text, timeout?, tabId?` | pollea el innerText hasta que aparezca el texto |
+| Tool | What it does |
+|---|---|
+| `list_tabs` | tabs with id, title, url |
+| `new_tab(url?)` | open a tab (active) |
+| `close_tab(id)` / `activate_tab(id)` | tab management |
+| `navigate(url, tabId?)` | navigate and wait for load |
+| `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element |
+| `click(ref)` | resolve ref and click |
+| `type(ref, text)` | focus + type; trailing `\n` = Enter |
+| `screenshot(tabId?)` | PNG (base64) |
+| `wait_for(text, timeout?)` | poll page text until it appears |
 
-Flujo típico: `list_tabs` o `new_tab` → `snapshot` → `click`/`type` con los
-refs → `wait_for`/`screenshot` para verificar. Si una navegación invalida los
-refs, re-hacé un snapshot.
+## Notes
 
-## Variables de entorno
+- While the agent acts, Chrome shows the "being debugged" banner. That is
+  expected with CDP; the extension auto-detaches after 30s idle.
+- Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 9223, extension
+  expects the default), `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
+- Security: the WebSocket binds to 127.0.0.1 only and rejects non-extension
+  origins. Page content never leaves your machine through this bridge; it
+  goes only to your model provider, exactly like any opencode prompt.
 
-| variable | default | qué controla |
-|---|---|---|
-| `OPENCODE_CHROME_PORT` | `9223` | puerto del WS (siempre bindeado a 127.0.0.1) |
-| `OPENCODE_CHROME_TIMEOUT_MS` | `30000` | timeout por llamada a la extensión |
+## Development
 
-## Notas
-
-- El WS acepta solo conexiones con origin `chrome-extension://` (o sin origin,
-  como los clientes de test no-navegador), y escucha únicamente en localhost.
-- Mientras la extensión opera una pestaña, Chrome muestra el banner "Chrome is
-  being debugged". Es normal: aparece al attach de CDP y desaparece solo cuando
-  la extensión se desattacha (idle ~30s) o cerrás la pestaña.
-- Si una tool falla con "Chrome extension not connected": abrí Chrome o
-  recargá la extensión en `chrome://extensions`; el puente sigue corriendo y
-  las tools vuelven a funcionar apenas reconecta.
-
-## Desarrollo
-
-```sh
+```bash
 npm install
-npm test        # node --test test/
+npm test        # bridge tests (node:test, no Chrome needed)
+npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
 ```
 
-Estructura: `src/index.js` (servidor MCP stdio + WS server con multiplexado
-por id y timeout), `src/tools.js` (definición y schemas de las tools),
-`extension/` (MV3 service worker), `test/`.
+Icons are generated (no binary assets in git history by hand):
+`node scripts/gen-icons.js`.
+
+MIT license. See [LICENSE](LICENSE).
+
+---
+
+# opencode-chrome (español)
+
+Deja que [opencode](https://opencode.ai) maneje tu Chrome real: tus sesiones
+iniciadas, tus cookies, tus pestañas. Puente comunitario no oficial, al
+estilo de Claude in Chrome / Codex in Chrome.
+
+> **No oficial.** Sin afiliación con el proyecto opencode. BYOK: tus keys
+> viven en tu config de opencode. Este puente no recolecta nada y solo se
+> comunica con localhost.
+
+## Instalación
+
+1. **Extensión**: `chrome://extensions` → modo desarrollador → "Cargar
+   descomprimida" → carpeta `extension/` del repo. El badge muestra `off`
+   hasta que corra el puente.
+2. **Puente**: en tu `opencode.json`:
+   ```json
+   { "mcp": { "chrome": { "type": "local", "command": ["npx", "-y", "opencode-chrome"] } } }
+   ```
+3. Reinicia opencode y pedile cosas: *"abrí gmail y listá los remitentes no
+   leídos"*.
+
+Herramientas, notas de seguridad y desarrollo: ver sección en inglés arriba
+(mismo contenido).

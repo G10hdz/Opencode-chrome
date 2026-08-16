@@ -3,11 +3,22 @@
   "version": "0.1.0",
   "description": "MCP bridge that lets opencode drive your real Chrome via a thin MV3 extension",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/G10hdz/opencode-chrome.git"
+  },
+  "bugs": "https://github.com/G10hdz/opencode-chrome/issues",
+  "homepage": "https://github.com/G10hdz/opencode-chrome#readme",
+  "keywords": ["mcp", "opencode", "chrome", "browser-automation", "cdp"],
+  "files": ["src", "README.md", "LICENSE"],
   "bin": {
     "opencode-chrome": "src/index.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "pack": "bash scripts/pack-extension.sh",
+    "prepublishOnly": "npm test"
   },
   "engines": {
     "node": ">=18"
