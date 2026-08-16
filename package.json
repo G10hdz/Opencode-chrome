@@ -1,0 +1,20 @@
+{
+  "name": "opencode-chrome",
+  "version": "0.1.0",
+  "description": "MCP bridge that lets opencode drive your real Chrome via a thin MV3 extension",
+  "type": "module",
+  "bin": {
+    "opencode-chrome": "src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  }
+}

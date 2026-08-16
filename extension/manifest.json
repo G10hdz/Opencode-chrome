@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "opencode-chrome",
+  "version": "0.1.0",
+  "description": "Control de Chrome para opencode via puente local (chrome.debugger/CDP).",
+  "permissions": ["debugger", "tabs"],
+  "action": {},
+  "background": {
+    "service_worker": "background.js"
+  }
+}
