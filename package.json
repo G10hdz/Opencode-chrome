@@ -1,6 +1,6 @@
 {
   "name": "opencode-chrome",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP bridge that lets opencode drive your real Chrome via a thin MV3 extension",
   "type": "module",
   "license": "MIT",
