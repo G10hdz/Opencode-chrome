@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
 import { registerTools } from "./tools.js";
+import { spawnSync } from "node:child_process";
 
 const PORT = parseInt(process.env.OPENCODE_CHROME_PORT, 10) || 9223;
 const TIMEOUT_MS = parseInt(process.env.OPENCODE_CHROME_TIMEOUT_MS, 10) || 30000;
@@ -26,9 +27,27 @@ function loadToken() {
   return token;
 }
 
+// best-effort: copia el token al portapapeles para no tener que buscarlo en stderr
+function copyToClipboard(text) {
+  const cmds =
+    process.platform === "darwin"
+      ? [["pbcopy", []]]
+      : process.platform === "win32"
+        ? [["clip", []]]
+        : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]]];
+  for (const [cmd, args] of cmds) {
+    const r = spawnSync(cmd, args, { input: text });
+    if (!r.error && r.status === 0) return true;
+  }
+  return false;
+}
+
 const TOKEN = loadToken();
+const copied = process.env.OPENCODE_CHROME_TOKEN ? false : copyToClipboard(TOKEN);
 console.error(
-  `opencode-chrome: extension token ${TOKEN} — paste it into the extension options page`
+  `opencode-chrome: extension token ${TOKEN}` +
+    (copied ? " (copied to your clipboard)" : "") +
+    " — paste it into the extension options page"
 );
 
 let socket = null;
@@ -115,7 +134,7 @@ wss.on("error", (err) => {
   process.exit(1);
 });
 
-const server = new McpServer({ name: "opencode-chrome", version: "0.1.0" });
+const server = new McpServer({ name: "opencode-chrome", version: "0.1.1" });
 
 registerTools(server, async (tool, args) => {
   try {

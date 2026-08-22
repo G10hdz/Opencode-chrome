@@ -51,9 +51,10 @@ shows `off` until the token is configured and the bridge is running.
 ```
 
 **3. Pair the token** — the bridge generates a token at
-`~/.config/opencode-chrome/token` (or prints it to stderr at startup; set
+`~/.config/opencode-chrome/token` (or prints it to stderr and copies it to your clipboard at startup; set
 `OPENCODE_CHROME_TOKEN` to use your own). Paste it into the extension's
-options page (right-click the toolbar icon → Options). Connections without
+options page (right-click the toolbar icon → Options); it shows a live
+connection status and reconnects the moment you save. Connections without
 this token are refused, so other local processes can't drive your browser.
 
 **4. Use it** — restart opencode, then ask away: *"open gmail and list my

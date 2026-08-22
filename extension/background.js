@@ -46,6 +46,28 @@ async function connect() {
   };
 }
 
+function reconnectNow() {
+  if (ws) {
+    ws.onclose = null; // evita el auto-reconnect de 3s: reconectamos ya
+    try {
+      ws.close();
+    } catch {}
+    ws = null;
+  }
+  connect();
+}
+
+// la página de opciones avisa al guardar el token: reconecta al instante en vez de esperar la alarm
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg === "reconnect") {
+    reconnectNow();
+    return;
+  }
+  if (msg === "status") {
+    sendResponse({ connected: !!ws && ws.readyState === WebSocket.OPEN });
+  }
+});
+
 chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
