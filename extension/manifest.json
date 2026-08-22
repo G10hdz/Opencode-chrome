@@ -3,7 +3,7 @@
   "name": "opencode-chrome",
   "version": "0.1.0",
   "description": "Control de Chrome para opencode via puente local (chrome.debugger/CDP).",
-  "permissions": ["debugger", "tabs"],
+  "permissions": ["alarms", "debugger", "storage", "tabs"],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -18,5 +18,9 @@
   },
   "background": {
     "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   }
 }

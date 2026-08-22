@@ -15,8 +15,13 @@ function setBadge(on) {
   chrome.action.setBadgeBackgroundColor({ color: on ? "#2e7d32" : "#757575" });
 }
 
-function connect() {
-  ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+// MV3 suspende el SW y con el mueren los timers: alarms despierta el contexto para reconectar
+const KEEPALIVE_ALARM = "reconnect";
+
+async function connect() {
+  const { token } = await chrome.storage.local.get("token");
+  if (!token) return; // sin token configurado en las opciones no hay a quien autenticar
+  ws = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(token)}`);
   ws.onopen = () => setBadge(true);
   ws.onclose = () => {
     setBadge(false);
@@ -41,21 +46,28 @@ function connect() {
   };
 }
 
+chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== KEEPALIVE_ALARM) return;
+  // CONNECTING cuenta como intento en curso; no duplicar conexiones
+  if (!ws || ws.readyState === WebSocket.CLOSED) connect();
+});
+
 function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
 const requireArg = (args, name) => {
-  if (args[name] === undefined || args[name] === null) throw new Error(`falta el argumento ${name}`);
+  if (args[name] === undefined || args[name] === null) throw new Error(`missing argument ${name}`);
 };
 
 async function resolveTabId(args) {
   if (args.tabId !== undefined) {
-    if (typeof args.tabId !== "number") throw new Error("tabId debe ser un número");
+    if (typeof args.tabId !== "number") throw new Error("tabId must be a number");
     return args.tabId;
   }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) throw new Error("no hay pestaña activa");
+  if (!tab) throw new Error("no active tab");
   return tab.id;
 }
 
@@ -219,7 +231,8 @@ function SNAPSHOT_SCRIPT() {
     if (isInteractive) {
       refCount += 1;
       line = "[ref=" + refCount + "] " + describe(el);
-      refs[refCount] = selectorFor(el);
+      // fp = identidad del elemento al momento del snapshot; se verifica antes de actuar
+      refs[refCount] = { sel: selectorFor(el), fp: el.tagName.toLowerCase() + "|" + nameOf(el) };
     } else {
       if (!el.matches(TEXTY)) continue;
       const txt = ownText(el);
@@ -233,8 +246,24 @@ function SNAPSHOT_SCRIPT() {
     if (lines.length >= MAX_LINES || chars >= MAX_CHARS) overLimit = true;
     if (lines.length >= MAX_LINES * 2) break;
   }
-  if (overLimit) lines.push("… (recortado: contenido de texto omitido, snapshot enfocado si hace falta)");
+  if (overLimit) lines.push("… truncated: text content omitted, take a focused snapshot if needed");
   return { snapshot: lines.join("\n"), refs };
+}
+
+// Verificacion pre-accion del fp de un ref. nameOf debe calcularse igual que en SNAPSHOT_SCRIPT.
+function REF_CHECK_SCRIPT(sel, fp) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(sel)});
+    if (!el) return { found: false };
+    let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+    if (!name) {
+      if (el.labels && el.labels[0]) name = el.labels[0].innerText;
+      else if (el.type === "submit" || el.type === "button") name = el.value || "";
+      else name = el.innerText || el.value || el.placeholder || "";
+    }
+    name = name.replace(/\\s+/g, " ").trim().slice(0, 80);
+    return { found: true, match: (el.tagName.toLowerCase() + "|" + name) === ${JSON.stringify(fp)} };
+  })()`;
 }
 
 // --- tools ---
@@ -251,7 +280,7 @@ async function toolNewTab(args) {
 
 async function handleCloseActivate(tool, args) {
   requireArg(args, "id");
-  if (typeof args.id !== "number") throw new Error("id debe ser un número");
+  if (typeof args.id !== "number") throw new Error("id must be a number");
   if (tool === "close_tab") await chrome.tabs.remove(args.id);
   else await chrome.tabs.update(args.id, { active: true });
   return {};
@@ -268,18 +297,23 @@ async function toolNavigate(args) {
     try {
       tab = await chrome.tabs.get(tabId);
     } catch {
-      throw new Error("la pestaña se cerró durante la navegación");
+      throw new Error("tab was closed during navigation");
     }
     if (tab.status === "complete") return { url: tab.url };
     await sleep(250);
   }
-  throw new Error("navigate: timeout esperando carga (30s)");
+  throw new Error("navigate: timed out waiting for load (30s)");
 }
 
-function lookupRef(tabId, ref) {
-  const sel = refStores.get(tabId)?.refs[ref];
-  if (!sel) throw new Error("ref no encontrado, tomá un snapshot nuevo");
-  return sel;
+async function resolveRef(tabId, ref) {
+  const store = refStores.get(tabId);
+  const entry = store && store.refs[ref];
+  if (!entry) throw new Error("ref not found, take a new snapshot");
+  await ensureAttached(tabId);
+  const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp));
+  if (!state.found) throw new Error("element for this ref is gone, take a new snapshot");
+  if (!state.match) throw new Error("element changed since the snapshot, take a new one");
+  return entry.sel;
 }
 
 async function toolSnapshot(args) {
@@ -293,13 +327,11 @@ async function toolSnapshot(args) {
 async function toolClick(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
-  const sel = lookupRef(tabId, args.ref);
-  await ensureAttached(tabId);
-  const hit = await evaluate(
+  const sel = await resolveRef(tabId, args.ref);
+  await evaluate(
     tabId,
     `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.click(); return true; })()`
   );
-  if (!hit) throw new Error("ref no encontrado, tomá un snapshot nuevo");
   return {};
 }
 
@@ -308,13 +340,11 @@ async function toolType(args) {
   requireArg(args, "ref");
   requireArg(args, "text");
   const tabId = await resolveTabId(args);
-  const sel = lookupRef(tabId, args.ref);
-  await ensureAttached(tabId);
-  const focused = await evaluate(
+  const sel = await resolveRef(tabId, args.ref);
+  await evaluate(
     tabId,
     `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.focus(); return true; })()`
   );
-  if (!focused) throw new Error("ref no encontrado, tomá un snapshot nuevo");
   const body = args.text.endsWith("\n") ? args.text.slice(0, -1) : args.text;
   if (body) await cdp(tabId, "Input.insertText", { text: body });
   if (args.text.endsWith("\n")) {
@@ -361,7 +391,7 @@ const TOOLS = {
 
 async function handle(tool, args) {
   const fn = TOOLS[tool];
-  if (!fn) throw new Error(`tool desconocida: ${tool}`);
+  if (!fn) throw new Error(`unknown tool: ${tool}`);
   return fn(args);
 }
 

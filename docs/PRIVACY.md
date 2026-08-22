@@ -11,8 +11,10 @@ personal data to us. There is no backend and no analytics.
   tools are sent from your browser to the local bridge, and from there into
   the MCP client (opencode) you configured, which handles them according to
   your model provider's terms. We never see them.
-- The bridge binds to `127.0.0.1` only and rejects non-extension WebSocket
-  origins.
+- The bridge binds to `127.0.0.1` only, rejects non-extension WebSocket
+  origins, and requires a shared token between the bridge and the extension.
+  The only data stored locally is that token, in `chrome.storage.local`
+  (extension) and `~/.config/opencode-chrome/token` (bridge).
 
 Use of the `chrome.debugger` permission is limited to executing the
 documented tools (navigate, snapshot, click, type, screenshot, wait_for) in
@@ -30,8 +32,10 @@ transmiten datos personales a nadie. No hay backend ni analítica.
   procesan las herramientas van del navegador al puente local y de ahí al
   cliente MCP (opencode) que configuraste, que los trata según los términos
   de tu proveedor de modelos. Nosotros nunca los vemos.
-- El puente escucha únicamente en `127.0.0.1` y rechaza orígenes que no sean
-  extensiones.
+- El puente escucha únicamente en `127.0.0.1`, rechaza orígenes que no sean
+  extensiones y exige un token compartido entre puente y extensión. Lo único
+  que se guarda localmente es ese token: en `chrome.storage.local`
+  (extensión) y `~/.config/opencode-chrome/token` (puente).
 
 El uso del permiso `chrome.debugger` se limita a ejecutar las herramientas
 documentadas (navigate, snapshot, click, type, screenshot, wait_for) en la

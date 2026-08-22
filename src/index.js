@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
@@ -7,6 +11,26 @@ import { registerTools } from "./tools.js";
 const PORT = parseInt(process.env.OPENCODE_CHROME_PORT, 10) || 9223;
 const TIMEOUT_MS = parseInt(process.env.OPENCODE_CHROME_TIMEOUT_MS, 10) || 30000;
 
+// Token compartido con la extension: env var, o archivo persistente en ~/.config.
+// Cualquier proceso local podria conectar al WS; sin token tendria control total de Chrome.
+function loadToken() {
+  if (process.env.OPENCODE_CHROME_TOKEN) return process.env.OPENCODE_CHROME_TOKEN;
+  const file = join(homedir(), ".config", "opencode-chrome", "token");
+  try {
+    const saved = readFileSync(file, "utf8").trim();
+    if (saved) return saved;
+  } catch {}
+  const token = randomUUID().replaceAll("-", "");
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, token + "\n", { mode: 0o600 });
+  return token;
+}
+
+const TOKEN = loadToken();
+console.error(
+  `opencode-chrome: extension token ${TOKEN} — paste it into the extension options page`
+);
+
 let socket = null;
 let nextId = 1;
 const pending = new Map();
@@ -14,7 +38,8 @@ const pending = new Map();
 function notConnected() {
   return new Error(
     `Chrome extension not connected on ws://127.0.0.1:${PORT}. ` +
-      `Open Chrome, or reload the opencode-chrome extension in chrome://extensions, then retry.`
+      `Check Chrome is running and that the token in the extension options matches ` +
+      `this bridge's token (printed to stderr at startup), then retry.`
   );
 }
 
@@ -47,6 +72,11 @@ wss.on("connection", (ws, req) => {
   const origin = req.headers.origin;
   if (origin && !origin.startsWith("chrome-extension://")) {
     ws.close(1008, "origin not allowed");
+    return;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
+  if (token !== TOKEN) {
+    ws.close(1008, "invalid token");
     return;
   }
   if (socket && socket.readyState === socket.OPEN) {
@@ -90,6 +120,9 @@ const server = new McpServer({ name: "opencode-chrome", version: "0.1.0" });
 registerTools(server, async (tool, args) => {
   try {
     const result = await callExtension(tool, args);
+    if (result && typeof result === "object" && typeof result.image === "string") {
+      return { content: [{ type: "image", data: result.image, mimeType: "image/png" }] };
+    }
     const text = typeof result === "string" ? result : JSON.stringify(result ?? null);
     return { content: [{ type: "text", text }] };
   } catch (err) {

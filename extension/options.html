@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>opencode-chrome</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 2rem auto; padding: 0 1rem; }
+      label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; padding: 0.4rem; font-family: monospace; }
+      button { margin-top: 0.75rem; padding: 0.4rem 1rem; }
+      #status { margin-left: 0.5rem; color: #2e7d32; }
+      p { color: #555; }
+    </style>
+  </head>
+  <body>
+    <h1>opencode-chrome</h1>
+    <p>
+      Run the bridge (<code>npx opencode-chrome</code>) and copy the token it prints to
+      stderr, then paste it here.
+    </p>
+    <label for="token">Bridge token</label>
+    <input id="token" autocomplete="off" spellcheck="false" />
+    <button id="save">Save</button><span id="status"></span>
+    <script src="options.js"></script>
+  </body>
+</html>
