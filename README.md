@@ -84,8 +84,8 @@ npm test        # bridge tests (node:test, no Chrome needed)
 npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
 ```
 
-Icons are generated (no binary assets in git history by hand):
-`node scripts/gen-icons.js`.
+Icons live in `extension/icons/`, sized from the 1024px masters in `assets/`:
+`sips -z <size> <size> assets/logo-1024-transparent.png --out extension/icons/icon<size>.png`.
 
 MIT license. See [LICENSE](LICENSE).
 
