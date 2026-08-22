@@ -1,5 +1,9 @@
 # opencode-chrome
 
+[![npm](https://img.shields.io/npm/v/opencode-chrome.svg)](https://www.npmjs.com/package/opencode-chrome)
+[![ci](https://github.com/G10hdz/opencode-chrome/actions/workflows/ci.yml/badge.svg)](https://github.com/G10hdz/opencode-chrome/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/npm/l/opencode-chrome.svg)](LICENSE)
+
 Let [opencode](https://opencode.ai) drive your real Chrome: your logged-in
 sessions, your cookies, your tabs. An unofficial, community-built bridge in
 the spirit of Claude in Chrome / Codex in Chrome.
@@ -22,6 +26,12 @@ your real Chrome
 
 No backend, no accounts. The extension connects to the bridge on localhost
 and executes browser tools over the Chrome DevTools Protocol.
+
+## Requirements
+
+- Node 18 or newer
+- Google Chrome (or Chromium)
+- opencode (or any MCP client that launches a local stdio server)
 
 ## Install
 
@@ -76,6 +86,20 @@ form"*.
   never leaves your machine through this bridge; it goes only to your model
   provider, exactly like any opencode prompt.
 
+## Troubleshooting
+
+- **Badge stays `off`** — the extension is not connected. Check that the
+  bridge is running (opencode launches `npx opencode-chrome`; its stderr
+  prints the token at startup) and that the token in the options page
+  matches. The badge turns `on` within a minute of both being in place.
+- **A tool returns "Chrome extension not connected"** — same causes as
+  above; the bridge is up but no extension has paired.
+- **`cannot listen on 127.0.0.1:9223`** — another process holds the port.
+  Free it, or set `OPENCODE_CHROME_PORT`. The extension expects 9223, so a
+  custom port also needs editing `PORT` in `extension/background.js`.
+- **`debugger attach` fails** — a tab allows only one debugger client. Close
+  DevTools on that tab (or detach other debuggers) and retry.
+
 ## Development
 
 ```bash
@@ -86,6 +110,9 @@ npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
 
 Icons live in `extension/icons/`, sized from the 1024px masters in `assets/`:
 `sips -z <size> <size> assets/logo-1024-transparent.png --out extension/icons/icon<size>.png`.
+
+Contributions welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Working on the
+code with an AI agent? Start with [AGENTS.md](AGENTS.md).
 
 MIT license. See [LICENSE](LICENSE).
 
@@ -100,6 +127,12 @@ estilo de Claude in Chrome / Codex in Chrome.
 > **No oficial.** Sin afiliación con el proyecto opencode. BYOK: tus keys
 > viven en tu config de opencode. Este puente no recolecta nada y solo se
 > comunica con localhost.
+
+## Requisitos
+
+- Node 18 o superior
+- Google Chrome (o Chromium)
+- opencode (o cualquier cliente MCP que lance un servidor stdio local)
 
 ## Instalación
 
@@ -117,5 +150,7 @@ estilo de Claude in Chrome / Codex in Chrome.
 4. Reinicia opencode y pedile cosas: *"abrí gmail y listá los remitentes no
    leídos"*.
 
-Herramientas, notas de seguridad y desarrollo: ver sección en inglés arriba
-(mismo contenido).
+Herramientas, notas de seguridad, solución de problemas y desarrollo: ver
+sección en inglés arriba (mismo contenido). Para contribuir:
+[CONTRIBUTING.md](CONTRIBUTING.md); si trabajas con un agente de IA:
+[AGENTS.md](AGENTS.md).
