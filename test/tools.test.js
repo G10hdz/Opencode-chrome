@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 const INDEX = fileURLToPath(new URL('../src/index.js', import.meta.url));
 const TOOL_TIMEOUT_MS = 500;
 const MCP_DEADLINE_MS = 10000;
+const BRIDGE_TOKEN = 'itest-token';
 const EXPECTED_TOOLS = [
   'activate_tab',
   'click',
@@ -56,12 +57,17 @@ class Bridge {
     this.nextId = 1;
     this.pending = new Map();
     this.stderrTail = [];
-    this.exited = new Promise((resolve) => child.once('exit', () => resolve()));
+    this.exited = new Promise((resolve) =>
+      child.once('exit', () => {
+        // stderr legitimo del puente (logs) no es error; solo lo es que muera el proceso
+        this.failPending(new Error(`bridge exited early:\n${this.stderrTail.join('')}`));
+        resolve();
+      })
+    );
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (d) => {
       this.stderrTail.push(d);
       if (this.stderrTail.length > 20) this.stderrTail.shift();
-      this.failPending(new Error(`bridge exited early:\n${this.stderrTail.join('')}`));
     });
     let buf = '';
     child.stdout.setEncoding('utf8');
@@ -98,6 +104,7 @@ class Bridge {
         ...process.env,
         OPENCODE_CHROME_PORT: String(port),
         OPENCODE_CHROME_TIMEOUT_MS: String(TOOL_TIMEOUT_MS),
+        OPENCODE_CHROME_TOKEN: BRIDGE_TOKEN,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -157,8 +164,8 @@ function outcome(response) {
   return { isError: result.isError === true, text };
 }
 
-async function connectExtension(port, handler) {
-  const url = `ws://127.0.0.1:${port}`;
+async function connectExtension(port, handler, { token = BRIDGE_TOKEN } = {}) {
+  const url = `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
   const open = async () =>
     new Promise((resolve, reject) => {
       const ws = new WebSocket(url, { origin: 'chrome-extension://test-extension' });
@@ -274,4 +281,29 @@ test('unknown tool errors', async (t) => {
   const bridge = await startBridge(t);
   const { isError } = outcome(await bridge.callTool('no_such_tool'));
   assert.equal(isError, true);
+});
+
+test('connection without a valid token is refused with close code 1008', async (t) => {
+  const bridge = await startBridge(t);
+  const closed = new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${bridge.port}`, {
+      origin: 'chrome-extension://test-extension',
+    });
+    ws.once('close', (code) => resolve(code));
+    ws.once('error', () => {});
+  });
+  assert.equal(await withTimeout(closed, 5000, 'token reject'), 1008);
+});
+
+test('screenshot result comes back as MCP image content', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { image: 'aGVsbG8=' } });
+  });
+  t.after(() => ws.close());
+  const response = await bridge.callTool('screenshot');
+  const content = response.result?.content ?? [];
+  assert.equal(content[0]?.type, 'image');
+  assert.equal(content[0]?.mimeType, 'image/png');
+  assert.equal(content[0]?.data, 'aGVsbG8=');
 });

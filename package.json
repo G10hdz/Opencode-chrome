@@ -16,8 +16,8 @@
     "opencode-chrome": "src/index.js"
   },
   "scripts": {
-    "test": "node --test",
-    "pack": "bash scripts/pack-extension.sh",
+    "test": "node scripts/check-manifest.js && node --test",
+    "pack": "node scripts/check-manifest.js && bash scripts/pack-extension.sh",
     "prepublishOnly": "npm test"
   },
   "engines": {
