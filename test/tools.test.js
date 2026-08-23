@@ -10,6 +10,7 @@ const TOOL_TIMEOUT_MS = 500;
 const MCP_DEADLINE_MS = 10000;
 const BRIDGE_TOKEN = 'itest-token';
 const EXPECTED_TOOLS = [
+  'browser_status',
   'activate_tab',
   'click',
   'close_tab',
@@ -198,7 +199,7 @@ async function startBridge(t) {
   return bridge;
 }
 
-test('initialize handshake and tools/list expose the 10 tools', async (t) => {
+test('initialize handshake and tools/list expose the expected tools', async (t) => {
   const bridge = await startBridge(t);
   const response = await withTimeout(
     bridge.request('tools/list', {}),

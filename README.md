@@ -21,8 +21,8 @@ bridge in the spirit of Claude in Chrome / Codex in Chrome.
 
 ```
 you ▸ open github.com/notifications and tell me which repos have unread activity
-opencode ▸ navigate  github.com/notifications
-           snapshot  (reads the list as a text tree)
+you ▸ click the extension icon to attach that tab
+opencode ▸ snapshot  (reads the list as a text tree)
            → acme/api (2), acme/web (1), infra/deploy (5)
 
 you ▸ go to the staging checkout and screenshot it
@@ -36,9 +36,10 @@ while logged in, the agent can see too.
 ## How it works
 
 A tiny local bridge (`npx opencode-chrome`, an MCP server plus a WebSocket on
-`127.0.0.1:9223`) and an MV3 extension that connects to it and drives the
-active tab over the Chrome DevTools Protocol. No backend, no accounts, no
-analytics.
+`127.0.0.1:9223`) and an MV3 extension that connects to it and drives only the
+tabs you attach from the toolbar, using the Chrome DevTools Protocol. An
+attachment is limited to the tab's current origin. No backend, no accounts,
+no analytics.
 
 ## Requirements
 
@@ -71,13 +72,16 @@ Options); it shows a live connection status and reconnects the moment you
 save. Connections without this token are refused, so other local processes
 can't drive your browser.
 
-**4. Use it:** restart opencode, then ask away, like the session above.
+**4. Attach a tab:** restart opencode, open the page you want to share, and
+click the extension icon. Its badge shows `on` for attached tabs. Cross-origin
+navigation detaches the tab, so attach it again before continuing.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `list_tabs` | tabs with id, title, url |
+| `browser_status` | bridge connection and attached tabs |
+| `list_tabs` | attached tabs with id, title, url |
 | `new_tab(url?)` | open a tab (active) |
 | `close_tab(id)` / `activate_tab(id)` | tab management |
 | `navigate(url, tabId?)` | navigate and wait for load |
@@ -95,9 +99,10 @@ can't drive your browser.
   expects the default), `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
 - Security: the WebSocket binds to 127.0.0.1 only, rejects non-extension
   origins, and requires the shared bridge/extension token. The only data
-  stored locally is that token (in `chrome.storage.local`). Page content
-  never leaves your machine through this bridge; it goes only to your model
-  provider, exactly like any opencode prompt.
+  stored persistently is that token (in `chrome.storage.local`). Attached tab
+  origins live only in `chrome.storage.session`. Page content never leaves
+  your machine through this bridge; it goes only to your model provider,
+  exactly like any opencode prompt.
 
 ## Troubleshooting
 
@@ -161,9 +166,9 @@ iniciada, el agente también lo ve.
 ## Cómo funciona
 
 Un puente local chico (`npx opencode-chrome`, servidor MCP más un WebSocket en
-`127.0.0.1:9223`) y una extensión MV3 que se conecta a él y controla la
-pestaña activa por el Chrome DevTools Protocol. Sin backend, sin cuentas, sin
-analítica.
+`127.0.0.1:9223`) y una extensión MV3 que se conecta a él y controla solo las
+pestañas que adjuntas desde el ícono, mediante Chrome DevTools Protocol. Sin
+backend, sin cuentas, sin analítica.
 
 ## Requisitos
 
@@ -186,7 +191,8 @@ analítica.
    opciones de la extensión (click derecho en el ícono → Opciones); muestra
    el estado de conexión y reconecta apenas guardás. Sin ese token, las
    conexiones se rechazan.
-4. Reinicia opencode y pedile cosas, como en la sesión de arriba.
+4. Reinicia opencode, abre la página, haz clic en el ícono de la extensión para
+   adjuntar esa pestaña y luego pídele cosas.
 
 Herramientas, notas de seguridad, solución de problemas y desarrollo: ver
 sección en inglés arriba (mismo contenido). Para contribuir:
