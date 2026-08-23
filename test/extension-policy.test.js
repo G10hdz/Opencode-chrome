@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { attachedTab, exactOrigin, mostRecentAttached } from "../extension/policy.js";
+import {
+  attachedTab,
+  exactOrigin,
+  mostRecentAttached,
+  pollWhileAttached,
+  serializeMutation,
+} from "../extension/policy.js";
 
 test("exactOrigin accepts only HTTP origins", () => {
   assert.equal(exactOrigin("https://example.com/path?q=1"), "https://example.com");
@@ -31,4 +37,48 @@ test("mostRecentAttached ignores stale entries", () => {
   ];
 
   assert.equal(mostRecentAttached(attachments, tabs)?.tab.id, 2);
+});
+
+test("serialized attachment revocations cannot restore stale entries", async () => {
+  let attachments = { 1: { origin: "https://a.test" }, 2: { origin: "https://b.test" } };
+  const revoke = (tabId) => serializeMutation(async () => {
+    const next = { ...attachments };
+    await Promise.resolve();
+    delete next[tabId];
+    attachments = next;
+  });
+
+  await Promise.all([revoke(1), revoke(2)]);
+  assert.deepEqual(attachments, {});
+});
+
+test("attachment mutation queue recovers after an error", async () => {
+  await assert.rejects(serializeMutation(async () => {
+    throw new Error("storage failed");
+  }));
+  await assert.doesNotReject(serializeMutation(async () => {}));
+});
+
+test("wait polling stops after attachment is revoked", async () => {
+  let attached = true;
+  let checks = 0;
+
+  await assert.rejects(
+    pollWhileAttached({
+      assertAttached: async () => {
+        if (!attached) throw new Error("tab is no longer attached or origin changed");
+      },
+      check: async () => {
+        checks += 1;
+        return false;
+      },
+      pause: async () => {
+        attached = false;
+      },
+      timeout: 1000,
+      now: () => 0,
+    }),
+    /no longer attached/
+  );
+  assert.equal(checks, 1);
 });
