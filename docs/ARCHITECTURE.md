@@ -228,7 +228,8 @@ Allowed network fields:
 
 Request/response bodies, cookies, authorization headers, and raw headers are
 not captured in v0.2. Console arguments are converted to bounded text and
-truncated. State is deleted on detach, tab close, or debugger teardown.
+truncated. Idle debugger teardown stops collection but keeps the bounded
+buffers; state is deleted on explicit detach or tab close.
 
 ## Key flows
 
@@ -264,7 +265,7 @@ sequenceDiagram
     participant Chrome
 
     Model->>OpenCode: Request click(ref)
-    OpenCode->>User: Show tool, origin, and target
+    OpenCode->>User: Show click(ref) approval
     User-->>OpenCode: Allow once
     OpenCode->>Extension: click(ref)
     Extension->>Extension: Recheck tab, origin, document, and ref
