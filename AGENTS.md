@@ -11,8 +11,9 @@ Two halves that talk over a localhost WebSocket:
   server on `127.0.0.1:9223`. opencode calls MCP tools; the bridge forwards
   each call to the extension and returns the reply.
 - **Extension** (`extension/`) — an MV3 service worker that connects to the
-  bridge as a WebSocket client and drives the active tab through
-  `chrome.debugger` (Chrome DevTools Protocol).
+  bridge as a WebSocket client and drives only user-attached tabs through
+  `chrome.debugger` (Chrome DevTools Protocol). Attachments are session-scoped
+  and bound to an exact origin.
 
 There is no backend and no build step. The extension is plain JS loaded
 unpacked or zipped for the Chrome Web Store.
@@ -23,8 +24,10 @@ unpacked or zipped for the Chrome Web Store.
 src/index.js        MCP server + WebSocket server, token auth, request routing
 src/tools.js        tool names, descriptions, zod schemas (the MCP surface)
 extension/background.js   service worker: WS client + CDP tool implementations
+extension/policy.js       pure exact-origin and attached-tab policy helpers
 extension/options.js/html token pairing UI
 test/tools.test.js  node:test suite (spawns the bridge, fakes the extension)
+test/extension-policy.test.js pure attached-tab policy tests
 scripts/check-manifest.js validates the manifest before test/pack
 scripts/pack-extension.sh zips extension/ into dist/ for CWS
 ```
@@ -59,12 +62,18 @@ is JSON-stringified into text.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and forces a fresh snapshot if it changed. Keep
   `nameOf` identical between `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
+- Page tools resolve through `resolveTabId`, which accepts only a user-attached
+  tab whose current exact origin matches its session attachment. Do not bypass
+  this resolver with direct tab or debugger access.
 - The debugger auto-detaches after idle; navigation invalidates cached refs.
 
 If a change touches any of these, call it out explicitly in the PR.
 
 ## Conventions
 
+- Each product or architecture spec gets its own branch and pull request.
+- Each delegated task is delivered as one atomic commit that includes its
+  implementation and tests.
 - ES modules, Node 18+, no transpiler.
 - Keep dependencies minimal. The runtime deps are `@modelcontextprotocol/sdk`,
   `ws`, and `zod`. Don't add one for something a few lines can do.

@@ -13,12 +13,14 @@ personal data to us. There is no backend and no analytics.
   your model provider's terms. We never see them.
 - The bridge binds to `127.0.0.1` only, rejects non-extension WebSocket
   origins, and requires a shared token between the bridge and the extension.
-  The only data stored locally is that token, in `chrome.storage.local`
-  (extension) and `~/.config/opencode-chrome/token` (bridge).
+  The only data stored persistently is that token, in `chrome.storage.local`
+  (extension) and `~/.config/opencode-chrome/token` (bridge). Attached tab IDs
+  and exact origins are kept in `chrome.storage.session` and clear with the
+  browser session.
 
 Use of the `chrome.debugger` permission is limited to executing the
 documented tools (navigate, snapshot, click, type, screenshot, wait_for) in
-the tab the agent is operating on, and the debugger detaches automatically
+a tab the user explicitly attached, and the debugger detaches automatically
 after 30 seconds idle.
 
 ## Español
@@ -34,10 +36,12 @@ transmiten datos personales a nadie. No hay backend ni analítica.
   de tu proveedor de modelos. Nosotros nunca los vemos.
 - El puente escucha únicamente en `127.0.0.1`, rechaza orígenes que no sean
   extensiones y exige un token compartido entre puente y extensión. Lo único
-  que se guarda localmente es ese token: en `chrome.storage.local`
-  (extensión) y `~/.config/opencode-chrome/token` (puente).
+  que se guarda de forma persistente es ese token: en `chrome.storage.local`
+  (extensión) y `~/.config/opencode-chrome/token` (puente). Los IDs y orígenes
+  exactos de pestañas adjuntas viven en `chrome.storage.session` y se borran
+  con la sesión del navegador.
 
 El uso del permiso `chrome.debugger` se limita a ejecutar las herramientas
-documentadas (navigate, snapshot, click, type, screenshot, wait_for) en la
-pestaña sobre la que opera el agente; el debugger se desacopla solo tras 30
+documentadas (navigate, snapshot, click, type, screenshot, wait_for) en una
+pestaña que el usuario adjuntó explícitamente; el debugger se desacopla tras 30
 segundos de inactividad.

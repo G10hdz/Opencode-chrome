@@ -1,3 +1,5 @@
+import { attachedTab, exactOrigin, mostRecentAttached } from "./policy.js";
+
 // opencode-chrome service worker: cliente WS del puente MCP + control CDP via chrome.debugger.
 
 const PORT = 9223; // el puente lee OPENCODE_CHROME_PORT de su lado; este default debe coincidir
@@ -5,14 +7,34 @@ const RECONNECT_MS = 3000;
 const DEBUGGER_IDLE_MS = 30000; // auto-detach para que el banner "being debugged" desaparezca solo
 
 let ws = null;
+let connected = false;
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
+const ATTACHMENTS = "attachments";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function refreshBadges() {
+  const tabs = await chrome.tabs.query({});
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  await Promise.all(
+    tabs.map((tab) => {
+      const attached = attachedTab(attachments, tab.id, tab.url);
+      const text = connected ? (attached ? "on" : "") : "off";
+      return Promise.all([
+        chrome.action.setBadgeText({ tabId: tab.id, text }),
+        chrome.action.setBadgeBackgroundColor({
+          tabId: tab.id,
+          color: connected && attached ? "#2e7d32" : "#757575",
+        }),
+      ]);
+    })
+  );
+}
+
 function setBadge(on) {
-  chrome.action.setBadgeText({ text: on ? "on" : "off" });
-  chrome.action.setBadgeBackgroundColor({ color: on ? "#2e7d32" : "#757575" });
+  connected = on;
+  refreshBadges().catch(() => {});
 }
 
 // MV3 suspende el SW y con el mueren los timers: alarms despierta el contexto para reconectar
@@ -84,14 +106,35 @@ const requireArg = (args, name) => {
 };
 
 async function resolveTabId(args) {
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
   if (args.tabId !== undefined) {
     if (typeof args.tabId !== "number") throw new Error("tabId must be a number");
-    return args.tabId;
+    const tab = await chrome.tabs.get(args.tabId).catch(() => null);
+    if (!tab || !attachedTab(attachments, tab.id, tab.url)) throw new Error("tab is not attached or origin changed");
+    return tab.id;
   }
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) throw new Error("no active tab");
-  return tab.id;
+  const tabs = await chrome.tabs.query({});
+  const recent = mostRecentAttached(attachments, tabs);
+  if (!recent) throw new Error("no attached tab");
+  return recent.tab.id;
 }
+
+async function toggleAttachment() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) throw new Error("no active tab");
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const key = String(tab.id);
+  if (attachedTab(attachments, tab.id, tab.url)) delete attachments[key];
+  else {
+    const origin = exactOrigin(tab.url);
+    if (!origin) throw new Error("only http(s) tabs can be attached");
+    attachments[key] = { origin, attachedAt: Date.now() };
+  }
+  await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
+  await refreshBadges();
+}
+
+chrome.action.onClicked.addListener(() => toggleAttachment().catch(() => {}));
 
 // --- chrome.debugger / CDP ---
 
@@ -144,11 +187,28 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
   detachDebugger(tabId);
+  chrome.storage.session
+    .get(ATTACHMENTS)
+    .then(({ [ATTACHMENTS]: attachments = {} }) => {
+      delete attachments[String(tabId)];
+      return chrome.storage.session.set({ [ATTACHMENTS]: attachments });
+    })
+    .then(refreshBadges)
+    .catch(() => {});
 });
 
 // navegación invalida los refs: obliga a re-snapshot en vez de clickear selectores viejos
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url || info.status === "loading") refStores.delete(tabId);
+  if (!info.url) return;
+  chrome.storage.session.get(ATTACHMENTS).then(async ({ [ATTACHMENTS]: attachments = {} }) => {
+    const entry = attachments[String(tabId)];
+    if (entry && entry.origin !== exactOrigin(info.url)) {
+      delete attachments[String(tabId)];
+      await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
+      await refreshBadges();
+    }
+  });
 });
 
 async function evaluate(tabId, expression) {
@@ -292,7 +352,14 @@ function REF_CHECK_SCRIPT(sel, fp) {
 
 async function toolListTabs() {
   const tabs = await chrome.tabs.query({});
-  return { tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  return { tabs: tabs.filter((t) => attachedTab(attachments, t.id, t.url)).map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
+}
+
+async function toolBrowserStatus() {
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const tabs = await chrome.tabs.query({});
+  return { connected: !!ws && ws.readyState === WebSocket.OPEN, attached: tabs.filter((t) => attachedTab(attachments, t.id, t.url)).map((t) => ({ tabId: t.id, origin: attachments[String(t.id)].origin, attachedAt: attachments[String(t.id)].attachedAt })) };
 }
 
 async function toolNewTab(args) {
@@ -303,8 +370,9 @@ async function toolNewTab(args) {
 async function handleCloseActivate(tool, args) {
   requireArg(args, "id");
   if (typeof args.id !== "number") throw new Error("id must be a number");
-  if (tool === "close_tab") await chrome.tabs.remove(args.id);
-  else await chrome.tabs.update(args.id, { active: true });
+  const tabId = await resolveTabId({ tabId: args.id });
+  if (tool === "close_tab") await chrome.tabs.remove(tabId);
+  else await chrome.tabs.update(tabId, { active: true });
   return {};
 }
 
@@ -399,6 +467,7 @@ async function toolWaitFor(args) {
 }
 
 const TOOLS = {
+  browser_status: toolBrowserStatus,
   list_tabs: toolListTabs,
   new_tab: toolNewTab,
   close_tab: (a) => handleCloseActivate("close_tab", a),

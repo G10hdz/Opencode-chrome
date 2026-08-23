@@ -4,6 +4,7 @@ const tabId = z.number().int().optional();
 const ref = z.union([z.string(), z.number()]);
 
 export const TOOLS = [
+  { name: "browser_status", description: "Report bridge connection and attached tabs.", schema: {} },
   {
     name: "list_tabs",
     description: "List open tabs with id, title and url.",
