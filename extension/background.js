@@ -1,4 +1,4 @@
-import { attachedTab, exactOrigin, mostRecentAttached } from "./policy.js";
+import { attachedTab, exactOrigin, mostRecentAttached, pollWhileAttached, serializeMutation } from "./policy.js";
 
 // opencode-chrome service worker: cliente WS del puente MCP + control CDP via chrome.debugger.
 
@@ -119,33 +119,45 @@ async function resolveTabId(args) {
   return recent.tab.id;
 }
 
-async function toggleAttachment() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error("no active tab");
+async function assertAttached(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
-  const key = String(tab.id);
-  if (attachedTab(attachments, tab.id, tab.url)) delete attachments[key];
-  else {
-    const origin = exactOrigin(tab.url);
-    if (!origin) throw new Error("only http(s) tabs can be attached");
-    attachments[key] = { origin, attachedAt: Date.now() };
-  }
-  await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
-  await refreshBadges();
+  if (!tab || !attachedTab(attachments, tabId, tab.url)) throw new Error("tab is no longer attached or origin changed");
+  return tab;
+}
+
+async function toggleAttachment() {
+  return serializeMutation(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error("no active tab");
+    const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+    const key = String(tab.id);
+    if (attachedTab(attachments, tab.id, tab.url)) delete attachments[key];
+    else {
+      const origin = exactOrigin(tab.url);
+      if (!origin) throw new Error("only http(s) tabs can be attached");
+      attachments[key] = { origin, attachedAt: Date.now() };
+    }
+    await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
+    await refreshBadges();
+  });
 }
 
 chrome.action.onClicked.addListener(() => toggleAttachment().catch(() => {}));
 
 // --- chrome.debugger / CDP ---
 
-function cdp(tabId, method, params) {
-  return new Promise((resolve, reject) => {
+async function cdp(tabId, method, params) {
+  await assertAttached(tabId);
+  const result = await new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params, (res) => {
       const err = chrome.runtime.lastError;
       if (err) reject(new Error(`CDP ${method}: ${err.message}`));
       else resolve(res);
     });
   });
+  await assertAttached(tabId);
+  return result;
 }
 
 async function ensureAttached(tabId) {
@@ -187,12 +199,10 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
   detachDebugger(tabId);
-  chrome.storage.session
-    .get(ATTACHMENTS)
-    .then(({ [ATTACHMENTS]: attachments = {} }) => {
+  serializeMutation(() => chrome.storage.session.get(ATTACHMENTS).then(({ [ATTACHMENTS]: attachments = {} }) => {
       delete attachments[String(tabId)];
       return chrome.storage.session.set({ [ATTACHMENTS]: attachments });
-    })
+  }))
     .then(refreshBadges)
     .catch(() => {});
 });
@@ -201,14 +211,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url || info.status === "loading") refStores.delete(tabId);
   if (!info.url) return;
-  chrome.storage.session.get(ATTACHMENTS).then(async ({ [ATTACHMENTS]: attachments = {} }) => {
+  serializeMutation(async () => {
+    const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
     const entry = attachments[String(tabId)];
     if (entry && entry.origin !== exactOrigin(info.url)) {
       delete attachments[String(tabId)];
       await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
       await refreshBadges();
     }
-  });
+  }).catch(() => {});
 });
 
 async function evaluate(tabId, expression) {
@@ -379,6 +390,7 @@ async function handleCloseActivate(tool, args) {
 async function toolNavigate(args) {
   requireArg(args, "url");
   const tabId = await resolveTabId(args);
+  await assertAttached(tabId);
   await chrome.tabs.update(tabId, { url: args.url });
   await sleep(200); // margen para que status pase a loading antes del primer chequeo
   const deadline = Date.now() + 30000;
@@ -458,12 +470,14 @@ async function toolWaitFor(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
   const expr = `(() => { try { return document.body && document.body.innerText.includes(${JSON.stringify(args.text)}); } catch { return false; } })()`;
-  const deadline = Date.now() + timeout;
-  while (true) {
-    if (await evaluate(tabId, expr)) return { found: true };
-    if (Date.now() >= deadline) throw new Error(`wait_for: "${args.text}" no apareció en ${timeout}ms`);
-    await sleep(500);
-  }
+  const found = await pollWhileAttached({
+    assertAttached: () => assertAttached(tabId),
+    check: () => evaluate(tabId, expr),
+    pause: sleep,
+    timeout,
+  });
+  if (!found) throw new Error(`wait_for: "${args.text}" no apareció en ${timeout}ms`);
+  return { found: true };
 }
 
 const TOOLS = {
