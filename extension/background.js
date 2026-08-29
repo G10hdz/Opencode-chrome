@@ -2,7 +2,8 @@ import { attachedTab, exactOrigin, mostRecentAttached, pollWhileAttached, serial
 
 // opencode-chrome service worker: cliente WS del puente MCP + control CDP via chrome.debugger.
 
-const PORT = 9223; // el puente lee OPENCODE_CHROME_PORT de su lado; este default debe coincidir
+// 9223 lo pisan Electron apps (OpenWork/Cursor CDP). Bridge y extensión deben coincidir.
+const PORT = 19223; // bridge: OPENCODE_CHROME_PORT (default en src/index.js alineado)
 const RECONNECT_MS = 3000;
 const DEBUGGER_IDLE_MS = 30000; // auto-detach para que el banner "being debugged" desaparezca solo
 
