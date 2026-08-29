@@ -9,8 +9,11 @@ import { WebSocketServer } from "ws";
 import { registerTools } from "./tools.js";
 import { spawnSync } from "node:child_process";
 
-const PORT = parseInt(process.env.OPENCODE_CHROME_PORT, 10) || 9223;
+// default 19223 — 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
+const PORT = parseInt(process.env.OPENCODE_CHROME_PORT, 10) || 19223;
 const TIMEOUT_MS = parseInt(process.env.OPENCODE_CHROME_TIMEOUT_MS, 10) || 30000;
+// <30s: cada mensaje recibido resetea el idle timer del service worker (Chrome 116+)
+const KEEPALIVE_MS = parseInt(process.env.OPENCODE_CHROME_KEEPALIVE_MS, 10) || 20000;
 
 // Token compartido con la extension: env var, o archivo persistente en ~/.config.
 // Cualquier proceso local podria conectar al WS; sin token tendria control total de Chrome.
@@ -102,6 +105,10 @@ wss.on("connection", (ws, req) => {
     socket.close(1000, "replaced by newer connection");
   }
   socket = ws;
+  // keepalive: no-op sin tool; la extension lo filtra y el SW recibe actividad que evita su suspension
+  const keepalive = setInterval(() => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ id: -1 }));
+  }, KEEPALIVE_MS);
   ws.on("message", (data) => {
     let msg;
     try {
@@ -120,6 +127,7 @@ wss.on("connection", (ws, req) => {
     }
   });
   ws.on("close", () => {
+    clearInterval(keepalive);
     if (socket === ws) {
       socket = null;
       rejectPending("Chrome extension disconnected mid-call; retry once it reconnects.");

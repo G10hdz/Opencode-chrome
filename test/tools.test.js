@@ -98,7 +98,7 @@ class Bridge {
     this.pending.clear();
   }
 
-  static async start() {
+  static async start(extraEnv = {}) {
     const port = await pickFreePort();
     const child = spawn(process.execPath, [INDEX], {
       env: {
@@ -106,6 +106,7 @@ class Bridge {
         OPENCODE_CHROME_PORT: String(port),
         OPENCODE_CHROME_TIMEOUT_MS: String(TOOL_TIMEOUT_MS),
         OPENCODE_CHROME_TOKEN: BRIDGE_TOKEN,
+        ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -193,8 +194,8 @@ async function connectExtension(port, handler, { token = BRIDGE_TOKEN } = {}) {
   throw new Error(`extension could not connect: ${lastErr}`);
 }
 
-async function startBridge(t) {
-  const bridge = await Bridge.start();
+async function startBridge(t, extraEnv) {
+  const bridge = await Bridge.start(extraEnv);
   t.after(() => bridge.stop());
   return bridge;
 }
@@ -307,4 +308,19 @@ test('screenshot result comes back as MCP image content', async (t) => {
   assert.equal(content[0]?.type, 'image');
   assert.equal(content[0]?.mimeType, 'image/png');
   assert.equal(content[0]?.data, 'aGVsbG8=');
+});
+
+test('bridge sends keepalive no-ops that the extension can ignore', async (t) => {
+  const bridge = await startBridge(t, { OPENCODE_CHROME_KEEPALIVE_MS: '100' });
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    if (msg.tool) reply({ id: msg.id, result: {} }); // los keepalive no llevan tool: se ignoran
+  });
+  t.after(() => ws.close());
+  const sawNoop = new Promise((resolve) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.id === -1 && msg.tool === undefined) resolve(true);
+    });
+  });
+  assert.equal(await withTimeout(sawNoop, 5000, 'keepalive no-op'), true);
 });
