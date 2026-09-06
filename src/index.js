@@ -101,8 +101,9 @@ wss.on("connection", (ws, req) => {
     ws.close(1008, "invalid token");
     return;
   }
-  if (socket && socket.readyState === socket.OPEN) {
-    socket.close(1000, "replaced by newer connection");
+  if (socket) {
+    rejectPending("Chrome extension connection replaced mid-call; check the page before retrying.");
+    socket.terminate();
   }
   socket = ws;
   // keepalive: no-op sin tool; la extension lo filtra y el SW recibe actividad que evita su suspension
@@ -110,13 +111,14 @@ wss.on("connection", (ws, req) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ id: -1 }));
   }, KEEPALIVE_MS);
   ws.on("message", (data) => {
+    if (socket !== ws) return;
     let msg;
     try {
       msg = JSON.parse(data.toString());
     } catch {
       return;
     }
-    const entry = pending.get(msg.id);
+    const entry = pending.get(msg?.id);
     if (!entry) return;
     pending.delete(msg.id);
     clearTimeout(entry.timer);
@@ -133,6 +135,7 @@ wss.on("connection", (ws, req) => {
       rejectPending("Chrome extension disconnected mid-call; retry once it reconnects.");
     }
   });
+  ws.on("error", () => ws.terminate());
 });
 
 wss.on("error", (err) => {
@@ -143,6 +146,14 @@ wss.on("error", (err) => {
 });
 
 const server = new McpServer({ name: "opencode-chrome", version: "0.1.1" });
+
+// The WebSocket listener must not outlive its stdio client and keep the port busy.
+process.stdin.once("end", () => {
+  rejectPending("MCP client disconnected.");
+  for (const client of wss.clients) client.terminate();
+  wss.close();
+  server.close().catch(() => {});
+});
 
 registerTools(server, async (tool, args) => {
   try {

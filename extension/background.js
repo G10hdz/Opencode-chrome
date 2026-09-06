@@ -5,9 +5,13 @@ import { attachedTab, exactOrigin, mostRecentAttached, pollWhileAttached, serial
 // 9223 lo pisan Electron apps (OpenWork/Cursor CDP). Bridge y extensión deben coincidir.
 const PORT = 19223; // bridge: OPENCODE_CHROME_PORT (default en src/index.js alineado)
 const RECONNECT_MS = 3000;
+const CONNECTION_IDLE_MS = 45000;
 const DEBUGGER_IDLE_MS = 30000; // auto-detach para que el banner "being debugged" desaparezca solo
 
 let ws = null;
+let reconnectTimer;
+let connectionTimer;
+let connectionAttempt = 0;
 let connected = false;
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
@@ -42,20 +46,41 @@ function setBadge(on) {
 const KEEPALIVE_ALARM = "reconnect";
 
 async function connect() {
+  if (ws && ws.readyState !== WebSocket.CLOSED) return;
+  clearTimeout(reconnectTimer);
+  const attempt = ++connectionAttempt;
   const { token } = await chrome.storage.local.get("token");
+  if (attempt !== connectionAttempt) return;
   if (!token) return; // sin token configurado en las opciones no hay a quien autenticar
-  ws = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(token)}`);
-  ws.onopen = () => setBadge(true);
-  ws.onclose = () => {
-    setBadge(false);
-    setTimeout(connect, RECONNECT_MS);
+  const socket = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(token)}`);
+  ws = socket;
+  const watchConnection = (ms) => {
+    clearTimeout(connectionTimer);
+    connectionTimer = setTimeout(() => {
+      if (ws === socket) reconnectNow();
+    }, ms);
   };
-  ws.onerror = () => {
+  watchConnection(10000);
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    setBadge(true);
+    watchConnection(CONNECTION_IDLE_MS);
+  };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
+    clearTimeout(connectionTimer);
+    setBadge(false);
+    reconnectTimer = setTimeout(connect, RECONNECT_MS);
+  };
+  socket.onerror = () => {
     try {
-      ws.close();
+      socket.close();
     } catch {}
   };
-  ws.onmessage = (ev) => {
+  socket.onmessage = (ev) => {
+    if (ws !== socket) return;
+    watchConnection(CONNECTION_IDLE_MS);
     let msg;
     try {
       msg = JSON.parse(ev.data);
@@ -64,18 +89,22 @@ async function connect() {
     }
     if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
     handle(msg.tool, msg.args || {})
-      .then((result) => send({ id: msg.id, result }))
-      .catch((e) => send({ id: msg.id, error: { message: e?.message || String(e) } }));
+      .then((result) => send(socket, { id: msg.id, result }))
+      .catch((e) => send(socket, { id: msg.id, error: { message: e?.message || String(e) } }));
   };
 }
 
 function reconnectNow() {
-  if (ws) {
-    ws.onclose = null; // evita el auto-reconnect de 3s: reconectamos ya
+  ++connectionAttempt;
+  clearTimeout(reconnectTimer);
+  clearTimeout(connectionTimer);
+  const previous = ws;
+  ws = null;
+  setBadge(false);
+  if (previous) {
     try {
-      ws.close();
+      previous.close();
     } catch {}
-    ws = null;
   }
   connect();
 }
@@ -98,8 +127,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (!ws || ws.readyState === WebSocket.CLOSED) connect();
 });
 
-function send(msg) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+function send(socket, msg) {
+  if (ws === socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
 const requireArg = (args, name) => {

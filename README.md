@@ -44,7 +44,7 @@ no analytics.
 ## Requirements
 
 - Node 18 or newer
-- Google Chrome (or Chromium)
+- Google Chrome (or Chromium) 116 or newer
 - opencode (or any MCP client that launches a local stdio server)
 
 ## Install
@@ -112,9 +112,16 @@ navigation detaches the tab, so attach it again before continuing.
   matches. The options page shows the connection status live.
 - **A tool returns "Chrome extension not connected":** same causes as
   above; the bridge is up but no extension has paired.
-- **`cannot listen on 127.0.0.1:9223`:** another process holds the port.
-  Free it, or set `OPENCODE_CHROME_PORT`. The extension expects 9223, so a
+- **`cannot listen on 127.0.0.1:19223`:** another process holds the port.
+  Close the other bridge or MCP client, or set `OPENCODE_CHROME_PORT`. The extension expects 19223, so a
   custom port also needs editing `PORT` in `extension/background.js`.
+- **Connection drops after sleep or a restart:** the extension retries every
+  three seconds while awake and uses a Chrome alarm to recover after suspension.
+  A connection that receives no messages for 45 seconds is replaced. If a tool
+  was interrupted, check the page before retrying; actions are not replayed.
+- **Testing a local fix:** `npx opencode-chrome` runs the published package.
+  Change the MCP `command` to `["node", "/absolute/path/to/opencode-chrome/src/index.js"]`,
+  reload the extension in `chrome://extensions`, then restart opencode.
 - **`debugger attach` fails:** a tab allows only one debugger client. Close
   DevTools on that tab (or detach other debuggers) and retry.
 
@@ -173,7 +180,7 @@ backend, sin cuentas, sin analítica.
 ## Requisitos
 
 - Node 18 o superior
-- Google Chrome (o Chromium)
+- Google Chrome (o Chromium) 116 o superior
 - opencode (o cualquier cliente MCP que lance un servidor stdio local)
 
 ## Instalación
