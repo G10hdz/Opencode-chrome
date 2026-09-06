@@ -324,3 +324,36 @@ test('bridge sends keepalive no-ops that the extension can ignore', async (t) =>
   });
   assert.equal(await withTimeout(sawNoop, 5000, 'keepalive no-op'), true);
 });
+
+test('bridge exits and releases its port when the MCP client closes stdin', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, () => {});
+  t.after(() => ws.close());
+  bridge.child.stdin.end();
+  await withTimeout(bridge.exited, 1500, 'bridge shutdown');
+  assert.equal(bridge.child.exitCode, 0);
+  const listener = net.createServer();
+  await new Promise((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(bridge.port, '127.0.0.1', resolve);
+  });
+  await new Promise((resolve) => listener.close(resolve));
+});
+
+test('replacing the extension fails old calls without affecting new calls', async (t) => {
+  const bridge = await startBridge(t);
+  let received;
+  const requestReceived = new Promise((resolve) => { received = resolve; });
+  const old = await connectExtension(bridge.port, () => received());
+  t.after(() => old.close());
+  const pending = bridge.callTool('list_tabs');
+  await requestReceived;
+  const current = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { connected: true } });
+  });
+  t.after(() => current.close());
+  const result = outcome(await pending);
+  assert.equal(result.isError, true);
+  assert.match(result.text, /replaced|disconnected/i);
+  assert.equal(outcome(await bridge.callTool('browser_status')).isError, false);
+});
