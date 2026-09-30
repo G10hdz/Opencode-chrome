@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>opencode-chrome — architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1100px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      margin-bottom: 0.4rem;
+    }
+    .sub { color: var(--color-muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    svg { width: 100%; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>opencode-chrome — your real browser, agented</h1>
+    <p class="sub">Unofficial bridge: opencode talks MCP to a localhost bridge; the MV3 extension drives only attached tabs over CDP, scoped to their origin.</p>
+
+    <svg viewBox="0 0 1100 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="oc-title oc-desc">
+      <title id="oc-title">opencode-chrome: MCP bridge to extension</title>
+      <desc id="oc-desc">opencode (o cualquier MCP client) habla con el bridge local npx opencode-chrome en 127.0.0.1:9223; la extension MV3 se conecta por WebSocket y maneja solo tabs adjuntadas desde el toolbar via Chrome DevTools Protocol, limitada al origen actual; no hay backend ni cuentas.</desc>
+      <defs>
+        <marker id="oc-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="oc-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+      </defs>
+
+      <rect width="1100" height="420" fill="#f5f5f5"/>
+
+      <!-- opencode -->
+      <rect x="40" y="150" width="200" height="90" rx="6" fill="rgba(79,93,117,0.06)" stroke="#7a8399" stroke-width="1"/>
+      <text x="140" y="178" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">opencode</text>
+      <text x="140" y="196" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">o cualquier MCP client</text>
+      <text x="140" y="214" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">BYOK — keys en tu config</text>
+
+      <!-- bridge -->
+      <rect x="310" y="140" width="230" height="110" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <rect x="318" y="146" width="44" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="340" y="155" fill="rgba(235,108,54,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BRIDGE</text>
+      <text x="425" y="178" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">npx opencode-chrome</text>
+      <text x="425" y="196" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MCP server (stdio) + WS</text>
+      <text x="425" y="214" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">127.0.0.1:9223</text>
+      <text x="425" y="232" fill="#7a8399" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle">no backend · no analytics</text>
+
+      <!-- extension -->
+      <rect x="610" y="140" width="220" height="110" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <rect x="618" y="146" width="52" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+      <text x="644" y="155" fill="rgba(235,108,54,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MV3 EXT</text>
+      <text x="720" y="178" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">extension/</text>
+      <text x="720" y="196" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">background.js · policy.js</text>
+      <text x="720" y="214" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">attach por tab desde toolbar</text>
+      <text x="720" y="232" fill="#7a8399" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle">scope: origen del tab</text>
+
+      <!-- chrome -->
+      <rect x="890" y="140" width="180" height="110" rx="6" fill="rgba(79,93,117,0.06)" stroke="#7a8399" stroke-width="1"/>
+      <text x="980" y="170" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Tu Chrome</text>
+      <text x="980" y="188" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sesion real — Gmail,</text>
+      <text x="980" y="204" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">dashboards, staging</text>
+      <text x="980" y="226" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CDP</text>
+
+      <!-- edges -->
+      <path d="M 240 195 L 310 195" fill="none" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#oc-arrow-accent)"/>
+      <text x="262" y="186" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">MCP</text>
+      <path d="M 540 195 L 610 195" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#oc-arrow)"/>
+      <text x="562" y="186" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">WS :9223</text>
+      <path d="M 830 195 L 890 195" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#oc-arrow)"/>
+      <text x="848" y="186" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CDP</text>
+
+      <!-- tools note -->
+      <rect x="40" y="290" width="1020" height="56" rx="6" fill="rgba(45,49,66,0.05)" stroke="rgba(45,49,66,0.32)" stroke-width="0.8"/>
+      <text x="550" y="312" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">snapshot (text tree) · navigate · screenshot (PNG) — todo lo que ves logueado, el agente lo ve</text>
+      <text x="550" y="332" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">token + chrome-extension:// Origin requeridos · refs con fingerprint re-check · debugger auto-detach</text>
+    </svg>
+  </div>
+</body>
+</html>
