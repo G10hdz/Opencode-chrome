@@ -309,6 +309,30 @@ test('a policy message extends the attachment to allowlisted origins', async () 
   await assert.rejects(w.ctx.resolveTabId({ tabId: 7 }), (e) => e.errorCode === 'tab_not_attached');
 });
 
+test('resolveFrameSession gates OOPIF access on the attachment allowlist', async () => {
+  const w = await worker();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  runInNewContext(`
+    frameSessions.set(7, new Map([
+      ['sess-pay', { targetId: 'frame-pay', url: 'https://payments.example.com/embed' }],
+      ['sess-ads', { targetId: 'frame-ads', url: 'https://ads.example.com/x' }],
+      ['sess-da', { targetId: 'fdup-a', url: 'https://dup.example.com/a' }],
+      ['sess-db', { targetId: 'fdup-b', url: 'https://dup.example.com/b' }],
+    ]));
+    originAllowlist = { 'https://app.example.com': ['https://payments.example.com'] };
+  `, w.ctx);
+  // allowlisted por substring de url y por targetId exacto
+  assert.equal((await w.ctx.resolveFrameSession(7, 'payments')).sessionId, 'sess-pay');
+  assert.equal((await w.ctx.resolveFrameSession(7, 'frame-pay')).targetId, 'frame-pay');
+  // origen no autorizado -> origin_not_allowed
+  await assert.rejects(w.ctx.resolveFrameSession(7, 'ads'), (e) => e.errorCode === 'origin_not_allowed');
+  // ambiguo y desconocido -> frame_not_found
+  await assert.rejects(w.ctx.resolveFrameSession(7, 'dup.example.com'), (e) => e.errorCode === 'frame_not_found');
+  await assert.rejects(w.ctx.resolveFrameSession(7, 'nope'), (e) => e.errorCode === 'frame_not_found');
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];

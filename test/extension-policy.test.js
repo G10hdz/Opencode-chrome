@@ -5,6 +5,7 @@ import {
   attachedTab,
   exactOrigin,
   mostRecentAttached,
+  originAllowed,
   pollWhileAttached,
   serializeMutation,
 } from "../extension/policy.js";
@@ -39,6 +40,18 @@ test("attachedTab honors the per-origin allowlist", () => {
   const tabs = [{ id: 7, url: "https://sso.example.com/login" }];
   assert.equal(mostRecentAttached(attachments, tabs, allowlist)?.tab.id, 7);
   assert.equal(mostRecentAttached(attachments, tabs), null);
+});
+
+test("originAllowed gates frame origins on the attachment allowlist", () => {
+  const allowlist = { "https://app.example.com": ["https://sso.example.com"] };
+
+  assert.equal(originAllowed("https://app.example.com", "https://app.example.com/x", allowlist), true);
+  assert.equal(originAllowed("https://app.example.com", "https://sso.example.com/e", allowlist), true);
+  assert.equal(originAllowed("https://app.example.com", "https://ads.example.com", allowlist), false);
+  assert.equal(originAllowed("https://app.example.com", "https://sso.example.com", {}), false);
+  // non-http urls nunca pasan
+  assert.equal(originAllowed("https://app.example.com", "chrome://settings", allowlist), false);
+  assert.equal(originAllowed("https://app.example.com", "about:blank", allowlist), false);
 });
 
 test("mostRecentAttached ignores stale entries", () => {

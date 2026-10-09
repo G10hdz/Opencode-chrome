@@ -1,4 +1,4 @@
-import { attachedTab, exactOrigin, mostRecentAttached, pollWhileAttached, serializeMutation } from "./policy.js";
+import { attachedTab, exactOrigin, mostRecentAttached, originAllowed, pollWhileAttached, serializeMutation } from "./policy.js";
 
 // opencode-chrome service worker: cliente WS del puente MCP + control CDP via chrome.debugger.
 
@@ -17,6 +17,9 @@ const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del ú
 const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring buffer de red
 const dialogStores = new Map(); // tabId -> { recent: [], pending, policy } de diálogos JS
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
+// OOPIFs = iframes cross-origin auto-attachados como sesiones hijas (flatten); el
+// listener onEvent llena el registro. Sus comandos se rutean con {tabId, sessionId}.
+const frameSessions = new Map(); // tabId -> Map<sessionId, {targetId, url}>
 const ATTACHMENTS = "attachments";
 // orígenes extra por origen de attachment (SSO redirects). La empuja el bridge al conectar
 // ({policy:{origin_allowlist}}); vacío = solo origen exacto. Nace del bridge: la página
@@ -220,10 +223,11 @@ chrome.action.onClicked.addListener(() => toggleAttachment().catch(() => {}));
 
 // --- chrome.debugger / CDP ---
 
-async function cdp(tabId, method, params) {
+async function cdp(tabId, method, params, sessionId) {
   await assertAttached(tabId);
+  const target = sessionId ? { tabId, sessionId } : { tabId };
   const result = await new Promise((resolve, reject) => {
-    chrome.debugger.sendCommand({ tabId }, method, params, (res) => {
+    chrome.debugger.sendCommand(target, method, params, (res) => {
       const err = chrome.runtime.lastError;
       if (err) {
         const e = new Error(`CDP ${method}: ${err.message}`);
@@ -280,6 +284,28 @@ async function ensureAttached(tabId) {
     });
     await session.page;
   }
+  // autoAttach flatten: los OOPIFs se attachan como sesiones hijas en este canal;
+  // sus eventos y comandos viajan con sessionId en el mismo debugger
+  if (!session.autoAttach) {
+    session.autoAttach = new Promise((resolve) => {
+      chrome.debugger.sendCommand(
+        { tabId },
+        "Target.setAutoAttach",
+        { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+        () => resolve(!chrome.runtime.lastError)
+      );
+    });
+    await session.autoAttach;
+  }
+}
+
+function frameStore(tabId) {
+  let f = frameSessions.get(tabId);
+  if (!f) {
+    f = new Map();
+    frameSessions.set(tabId, f);
+  }
+  return f;
 }
 
 const NET_RING_LIMIT = 100;
@@ -306,6 +332,15 @@ function netStore(tabId) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (!debuggerSessions.has(tabId)) return; // solo tabs con debugger nuestro
+  if (method === "Target.attachedToTarget") {
+    const t = params.targetInfo;
+    if (t?.type === "iframe") frameStore(tabId).set(params.sessionId, { targetId: t.targetId, url: t.url });
+    return;
+  }
+  if (method === "Target.detachedFromTarget") {
+    frameSessions.get(tabId)?.delete(params.sessionId);
+    return;
+  }
   if (method === "Page.javascriptDialogOpening") {
     // un diálogo abierto bloquea CDP: se auto-responde con la política del tab (default accept)
     const d = dialogStore(tabId);
@@ -355,6 +390,7 @@ function detachDebugger(tabId) {
   if (!session) return;
   clearTimeout(session.idle);
   debuggerSessions.delete(tabId);
+  frameSessions.delete(tabId);
   chrome.debugger.detach({ tabId }, () => void chrome.runtime.lastError);
 }
 
@@ -363,12 +399,14 @@ chrome.debugger.onDetach.addListener((source) => {
   if (session) {
     clearTimeout(session.idle);
     debuggerSessions.delete(source.tabId);
+    frameSessions.delete(source.tabId);
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
   netStores.delete(tabId);
+  frameSessions.delete(tabId);
   dialogStores.delete(tabId);
   detachDebugger(tabId);
   serializeMutation(() => chrome.storage.session.get(ATTACHMENTS).then(({ [ATTACHMENTS]: attachments = {} }) => {
@@ -385,6 +423,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
     refStores.delete(tabId);
     netStores.delete(tabId);
     dialogStores.delete(tabId);
+    frameSessions.delete(tabId);
   }
   if (!info.url) return;
   serializeMutation(async () => {
@@ -398,11 +437,11 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   }).catch(() => {});
 });
 
-async function evaluate(tabId, expression) {
+async function evaluate(tabId, expression, sessionId) {
   const res = await cdp(tabId, "Runtime.evaluate", {
     expression,
     returnByValue: true,
-  });
+  }, sessionId);
   if (res.exceptionDetails) {
     const d = res.exceptionDetails;
     fail(
@@ -736,7 +775,31 @@ async function toolNavigate(args) {
   );
 }
 
-// Resuelve ref → { sel, level }. level: exact | reidentified | stable; stale_ref si no hay match.
+// frame = targetId de list_frames o substring único de url. Un OOPIF es otra frontera de
+// confianza: su origen debe estar en la allowlist del origen de attachment (igual que un
+// redirect SSO). Devuelve {sessionId, targetId, url}; null si frame viene undefined.
+async function resolveFrameSession(tabId, frame) {
+  if (frame === undefined || frame === null) return null;
+  const all = [...frameStore(tabId)].map(([sessionId, t]) => ({ sessionId, ...t }));
+  let hits = all.filter((f) => f.targetId === frame);
+  if (!hits.length && typeof frame === "string") hits = all.filter((f) => f.url.includes(frame));
+  if (!hits.length)
+    fail("frame_not_found", "run list_frames to see frame ids and urls, then retry", `frame not found: ${frame}`);
+  if (hits.length > 1)
+    fail("frame_not_found", "narrow the match with a frameId from list_frames", `frame is ambiguous: ${hits.map((h) => h.targetId).join(", ")}`);
+  const t = hits[0];
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const origin = attachments[String(tabId)]?.origin;
+  if (!origin || !originAllowed(origin, t.url, originAllowlist))
+    fail(
+      "origin_not_allowed",
+      "the embedded frame's origin is not allowlisted for this tab; add it under the attached origin in ~/.config/opencode-chrome/policy.json",
+      `frame origin not allowed for this tab: ${t.url}`
+    );
+  return t;
+}
+
+// Resuelve ref → { sel, level, sessionId }. level: exact | reidentified | stable; stale_ref si no hay match.
 // Refs sensibles (password/pago/identidad) se rechazan aquí: el gate cubre toda acción por ref,
 // incluidas las tools de escritura futuras que pasen por resolveRef.
 async function resolveRef(tabId, ref) {
@@ -751,7 +814,7 @@ async function resolveRef(tabId, ref) {
       `ref ${ref} points to a sensitive field (${entry.sensitive}); agent input is blocked`
     );
   await ensureAttached(tabId);
-  const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp));
+  const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp), store.sessionId);
   if (!state.found)
     fail("stale_ref", "take a fresh snapshot and use a ref from it", "element for this ref is gone, take a new snapshot");
   if (state.sensitive)
@@ -761,7 +824,7 @@ async function resolveRef(tabId, ref) {
       `ref ${ref} now resolves to a sensitive field (${state.sensitive}); agent input is blocked`
     );
   if (state.sel !== entry.sel) entry.sel = state.sel; // reidentified: adopta el selector nuevo
-  return { sel: state.sel, level: state.level || "exact" };
+  return { sel: state.sel, level: state.level || "exact", sessionId: store.sessionId };
 }
 
 async function toolSnapshot(args) {
@@ -772,14 +835,15 @@ async function toolSnapshot(args) {
   if (args.interactive_only === true) opts.interactiveOnly = true;
   if (args.in_viewport_only === true) opts.inViewportOnly = true;
   if (typeof args.max_chars === "number" && args.max_chars > 0) opts.maxChars = args.max_chars;
-  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`);
+  const frame = await resolveFrameSession(tabId, args.frame);
+  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`, frame?.sessionId);
   if (out.matched_selector === false)
     fail(
       "element_not_found",
       "check the selector with a full snapshot or list_tabs to confirm the page",
       `snapshot: no element matches ${opts.selector}`
     );
-  refStores.set(tabId, { refs: out.refs });
+  refStores.set(tabId, { refs: out.refs, sessionId: frame?.sessionId });
   return { snapshot: out.snapshot };
 }
 
@@ -794,14 +858,15 @@ async function toolFind(args) {
   if (!opts.text && !opts.role)
     fail("invalid_argument", "pass text and/or role", "find: needs text and/or role");
   if (typeof args.selector === "string" && args.selector) opts.selector = args.selector;
-  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`);
+  const frame = await resolveFrameSession(tabId, args.frame);
+  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`, frame?.sessionId);
   if (out.matched_selector === false)
     fail(
       "element_not_found",
       "check the selector with a full snapshot or list_tabs to confirm the page",
       `find: no element matches ${opts.selector}`
     );
-  refStores.set(tabId, { refs: out.refs });
+  refStores.set(tabId, { refs: out.refs, sessionId: frame?.sessionId });
   return { matches: out.matches ?? 0, snapshot: out.snapshot };
 }
 
@@ -818,11 +883,12 @@ async function toolReadText(args) {
     await new Promise((r) => setTimeout(r, 300));
     done();
   })`;
+  const frame = await resolveFrameSession(tabId, args.frame);
   const res = await cdp(tabId, "Runtime.evaluate", {
     expression: `(${scroll}).then(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.innerText.slice(0, ${max}) : null; })`,
     returnByValue: true,
     awaitPromise: true,
-  });
+  }, frame?.sessionId);
   if (res.exceptionDetails)
     fail(
       "page_script_error",
@@ -834,7 +900,7 @@ async function toolReadText(args) {
   return { text: res.result.value };
 }
 
-async function elementCenter(tabId, sel) {
+async function elementCenter(tabId, sel, sessionId) {
   return evaluate(
     tabId,
     `(() => {
@@ -848,32 +914,33 @@ async function elementCenter(tabId, sel) {
       if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return null;
       const top = document.elementFromPoint(x, y);
       return { x, y, obscured: !!top && !el.contains(top) && !top.contains(el) };
-    })()`
+    })()`,
+    sessionId
   );
 }
 
 async function toolClick(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
-  const point = await elementCenter(tabId, sel);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
+  const point = await elementCenter(tabId, sel, sessionId);
   if (!point)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `click: element not found or not visible: ${sel}`);
   const at = { x: point.x, y: point.y, button: "left", clickCount: 1 };
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 });
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at });
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 }, sessionId);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at }, sessionId);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at }, sessionId);
   return { clicked: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
 }
 
 async function toolHover(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
-  const point = await elementCenter(tabId, sel);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
+  const point = await elementCenter(tabId, sel, sessionId);
   if (!point)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `hover: element not found or not visible: ${sel}`);
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, sessionId);
   return { hovered: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
 }
 
@@ -882,21 +949,25 @@ async function toolDrag(args) {
   requireArg(args, "to");
   const tabId = await resolveTabId(args);
   const rf = await resolveRef(tabId, args.from);
-  const from = await elementCenter(tabId, rf.sel);
+  const rt = await resolveRef(tabId, args.to);
+  // coords de cada sesión son relativas a su viewport de frame: mezclarlas sería incorrecto
+  if (rf.sessionId !== rt.sessionId)
+    fail("invalid_argument", "drag between different frames is not supported; use two separate interactions", "drag: refs live in different frames");
+  const sessionId = rf.sessionId;
+  const from = await elementCenter(tabId, rf.sel, sessionId);
   if (!from)
     fail("element_not_found", "the source element moved or vanished; take a new snapshot and retry", `drag: source ref not found or not visible`);
-  const rt = await resolveRef(tabId, args.to);
-  const to = await elementCenter(tabId, rt.sel);
+  const to = await elementCenter(tabId, rt.sel, sessionId);
   if (!to)
     fail("element_not_found", "the target element moved or vanished; take a new snapshot and retry", `drag: target ref not found or not visible`);
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y }, sessionId);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 }, sessionId);
   for (let i = 1; i <= 3; i++) {
     const x = from.x + ((to.x - from.x) * i) / 3;
     const y = from.y + ((to.y - from.y) * i) / 3;
-    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left" });
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left" }, sessionId);
   }
-  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 }, sessionId);
   return { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, match_level: { from: rf.level, to: rt.level } };
 }
 
@@ -905,17 +976,18 @@ async function toolType(args) {
   requireArg(args, "ref");
   requireArg(args, "text");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
   await evaluate(
     tabId,
-    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.focus(); return true; })()`
+    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.focus(); return true; })()`,
+    sessionId
   );
   const body = args.text.endsWith("\n") ? args.text.slice(0, -1) : args.text;
-  if (body) await cdp(tabId, "Input.insertText", { text: body });
+  if (body) await cdp(tabId, "Input.insertText", { text: body }, sessionId);
   if (args.text.endsWith("\n")) {
     const enter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
-    await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter });
-    await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter });
+    await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter }, sessionId);
+    await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter }, sessionId);
   }
   return { typed: true, match_level: level };
 }
@@ -927,7 +999,7 @@ async function toolFill(args) {
   requireArg(args, "ref");
   requireArg(args, "value");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
   const out = await evaluate(
     tabId,
     `(() => {
@@ -953,7 +1025,8 @@ async function toolFill(args) {
       el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
       el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return { filled: true, verified: el.value === value, actual: el.value };
-    })()`
+    })()`,
+    sessionId
   );
   if (!out.filled) {
     const reason = out.error || "could not set value";
@@ -976,7 +1049,7 @@ async function toolSelect(args) {
   requireArg(args, "ref");
   requireArg(args, "option");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
   const out = await evaluate(
     tabId,
     `(() => {
@@ -997,7 +1070,8 @@ async function toolSelect(args) {
       el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
       el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return { selected: true, actual: opt.value };
-    })()`
+    })()`,
+    sessionId
   );
   if (!out.selected) {
     const extra = out.available ? ` — available: ${out.available.join(", ")}` : "";
@@ -1016,10 +1090,11 @@ async function toolSelect(args) {
 async function toolScroll(args) {
   const tabId = await resolveTabId(args);
   if (args.ref !== undefined) {
-    const { sel, level } = await resolveRef(tabId, args.ref);
+    const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
     const ok = await evaluate(
       tabId,
-      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); return true; })()`
+      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); return true; })()`,
+      sessionId
     );
     if (!ok)
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `scroll: element not found: ${sel}`);
@@ -1040,20 +1115,21 @@ async function toolUpload(args) {
   requireArg(args, "ref");
   requireArg(args, "files");
   const tabId = await resolveTabId(args);
-  const { sel, level } = await resolveRef(tabId, args.ref);
+  const { sel, level, sessionId } = await resolveRef(tabId, args.ref);
   const kind = await evaluate(
     tabId,
-    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.tagName + ":" + (el.getAttribute("type") || "") : null; })()`
+    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.tagName + ":" + (el.getAttribute("type") || "") : null; })()`,
+    sessionId
   );
   if (!kind)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `upload: element not found: ${sel}`);
   if (!/^INPUT:file$/i.test(kind))
     fail("wrong_element_type", "the ref must point to an <input type=file>", `upload: ref is not a file input (${kind})`);
-  const doc = await cdp(tabId, "DOM.getDocument", {});
-  const node = await cdp(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: sel });
+  const doc = await cdp(tabId, "DOM.getDocument", {}, sessionId);
+  const node = await cdp(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: sel }, sessionId);
   if (!node.nodeId)
     fail("element_not_found", "take a new snapshot and retry", `upload: node not found via DOM domain: ${sel}`);
-  await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files });
+  await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files }, sessionId);
   return { uploaded: args.files.length, files: args.files, match_level: level };
 }
 
@@ -1143,13 +1219,16 @@ async function toolScreenshot(args) {
   if (args.annotate === true) {
     const store = refStores.get(tabId);
     const marks = store ? Object.entries(store.refs).map(([n, e]) => ({ n: Number(n), sel: e.sel })) : [];
-    if (marks.length) marked = await evaluate(tabId, MARKS_INJECT(marks));
+    if (marks.length) marked = await evaluate(tabId, MARKS_INJECT(marks), store?.sessionId);
   }
   try {
     const res = await cdp(tabId, "Page.captureScreenshot", { format: "png" });
     return { image: res.data };
   } finally {
-    if (marked) await evaluate(tabId, MARKS_REMOVE).catch(() => {});
+    if (marked) {
+      const store = refStores.get(tabId);
+      await evaluate(tabId, MARKS_REMOVE, store?.sessionId).catch(() => {});
+    }
   }
 }
 
@@ -1174,6 +1253,35 @@ async function toolWaitFor(args) {
   return { found: true };
 }
 
+// Árbol de frames del tab: los OOPIFs (cross-origin, sesión hija del auto-attach)
+// reportan su sessionId y si su origen está en la allowlist del origen attached.
+// Sirve para descubrir qué pasarle a `frame` en snapshot/find/read_text.
+async function toolListFrames(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const tree = await cdp(tabId, "Page.getFrameTree", {});
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const origin = attachments[String(tabId)]?.origin;
+  const byTarget = new Map();
+  for (const [sessionId, t] of frameStore(tabId)) byTarget.set(t.targetId, sessionId);
+  const frames = [];
+  const walk = (node, parentFrameId) => {
+    const f = node.frame;
+    const sessionId = byTarget.get(f.id);
+    frames.push({
+      frameId: f.id,
+      url: f.url,
+      parentFrameId,
+      oopif: sessionId !== undefined,
+      sessionId,
+      allowed: sessionId === undefined ? true : !!origin && originAllowed(origin, f.url, originAllowlist),
+    });
+    for (const c of node.childFrames ?? []) walk(c, f.id);
+  };
+  walk(tree.frameTree, null);
+  return { frames };
+}
+
 const TOOLS = {
   browser_status: toolBrowserStatus,
   list_tabs: toolListTabs,
@@ -1184,6 +1292,7 @@ const TOOLS = {
   snapshot: toolSnapshot,
   find: toolFind,
   read_text: toolReadText,
+  list_frames: toolListFrames,
   click: toolClick,
   hover: toolHover,
   drag: toolDrag,
