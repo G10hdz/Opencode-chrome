@@ -187,6 +187,11 @@ npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
 # real-Chrome smoke: launches Chrome, loads the extension, drives a fixture
 # page end to end. Needs a Chrome binary; kept out of `npm test` for that reason.
 node scripts/e2e-smoke.mjs   # SMOKE_HEADLESS=1 for --headless=new
+
+# Playwright e2e suite (e2e/): same real path with broader coverage — tabs,
+# interactions, downloads, dialogs, network, guards. Also needs Chrome
+# (OPENCODE_CHROME_BIN overrides the lookup).
+npm run test:e2e
 ```
 
 Icons live in `extension/icons/`, sized from the 1024px masters in `assets/`:

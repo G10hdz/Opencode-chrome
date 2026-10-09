@@ -38,6 +38,8 @@ scripts/pack-extension.sh zips extension/ into dist/ for CWS
 npm test                       # check-manifest + node:test (no Chrome needed)
 node scripts/check-manifest.js # manifest sanity only
 npm run pack                   # dist/opencode-chrome-<version>.zip
+node scripts/e2e-smoke.mjs     # real-Chrome smoke (needs Chrome binary)
+npm run test:e2e               # Playwright suite, real Chrome + extension + bridge
 ```
 
 ## The tool contract lives in three places
