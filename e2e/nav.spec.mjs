@@ -12,6 +12,45 @@ test('navigate action back/forward/reload round-trips history', async ({ env, fi
   expect(rel.url).toBe(`${fixture.origin}/?nav=2`);
 });
 
+test('navigate init_script runs on the new document', async ({ env, fixture, attached }) => {
+  await env.mcp.call('navigate', {
+    url: `${fixture.origin}/?init=1`,
+    init_script: 'window.__e2eInit = 42',
+    tabId: attached.tabId,
+  });
+  // leo por la sesión debugger de la extensión (mismo canal que las tools)
+  const sw = await getSw(env);
+  const val = await sw.evaluate(`new Promise((r) => chrome.debugger.sendCommand(
+    { tabId: ${attached.tabId} },
+    'Runtime.evaluate',
+    { expression: 'window.__e2eInit', returnByValue: true },
+    (res) => r(res && res.result && res.result.value)
+  ))`);
+  expect(val).toBe(42);
+});
+
+test('navigate handle_before_unload auto-answers the dialog per tab policy', async ({ env, fixture, attached }) => {
+  // beforeunload necesita sticky activation: un click CDP real la provee
+  const found = await env.mcp.call('find', { text: 'call api', tabId: attached.tabId });
+  const ref = Number(/\[ref=(\d+)\]/.exec(JSON.stringify(found))?.[1]);
+  await env.mcp.call('click', { ref, tabId: attached.tabId });
+  const sw = await getSw(env);
+  await sw.evaluate(`new Promise((r) => chrome.debugger.sendCommand(
+    { tabId: ${attached.tabId} },
+    'Runtime.evaluate',
+    { expression: 'window.onbeforeunload = () => "x"', returnByValue: true },
+    (res) => r(res && res.result)
+  ))`);
+  const res = await env.mcp.call('navigate', {
+    url: `${fixture.origin}/?bunload=1`,
+    handle_before_unload: true,
+    tabId: attached.tabId,
+  });
+  // la nav completa: un beforeunload sin responder bloquearía hasta timeout.
+  // (los dialog stores se resetean por nav en onUpdated, igual que net/console)
+  expect(res.url).toBe(`${fixture.origin}/?bunload=1`);
+});
+
 test('navigate back with no history errors with no_history', async ({ env, attached }) => {
   // el tab del fixture solo tiene una entry
   await expect(
