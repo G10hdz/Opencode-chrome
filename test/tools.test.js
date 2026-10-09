@@ -17,7 +17,9 @@ const EXPECTED_TOOLS = [
   'drag',
   'fill',
   'get_network_body',
+  'handle_dialog',
   'hover',
+  'list_dialogs',
   'list_network',
   'list_tabs',
   'navigate',
@@ -382,6 +384,48 @@ test('read_text roundtrips extracted text through fake extension', async (t) => 
   const { isError, text } = outcome(await bridge.callTool('read_text', { selector: 'article' }));
   assert.equal(isError, false);
   assert.equal(JSON.parse(text).text, 'hola mundo');
+});
+
+test('list_dialogs returns pending and recent dialogs', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'list_dialogs');
+    reply({
+      id: msg.id,
+      result: {
+        pending: { type: 'confirm', message: '¿borrar?' },
+        recent: [{ type: 'alert', message: 'hi', handled: 'accept' }],
+        policy: { action: 'accept' },
+      },
+    });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('list_dialogs', {}));
+  assert.equal(isError, false);
+  const out = JSON.parse(text);
+  assert.equal(out.pending.type, 'confirm');
+  assert.equal(out.recent[0].handled, 'accept');
+});
+
+test('handle_dialog sets policy and answers a pending dialog', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'handle_dialog');
+    assert.equal(msg.args.action, 'dismiss');
+    reply({ id: msg.id, result: { policy: { action: 'dismiss' }, answered_pending: true } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(
+    await bridge.callTool('handle_dialog', { action: 'dismiss', prompt_text: 'x' })
+  );
+  assert.equal(isError, false);
+  assert.equal(JSON.parse(text).answered_pending, true);
+});
+
+test('handle_dialog rejects an invalid action', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError } = outcome(await bridge.callTool('handle_dialog', { action: 'maybe' }));
+  assert.equal(isError, true);
 });
 
 test('extension error propagates to tool result', async (t) => {

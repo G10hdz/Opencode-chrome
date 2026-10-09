@@ -15,6 +15,7 @@ let connectionAttempt = 0;
 let connected = false;
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
 const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring buffer de red
+const dialogStores = new Map(); // tabId -> { recent: [], pending, policy } de diálogos JS
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
 const ATTACHMENTS = "attachments";
 
@@ -259,9 +260,29 @@ async function ensureAttached(tabId) {
     });
     await session.network;
   }
+  // Page.enable una vez por sesión: habilita javascriptDialogOpening para que los
+  // diálogos JS no congelen el tab mientras el debugger está attachado
+  if (!session.page) {
+    session.page = new Promise((resolve) => {
+      chrome.debugger.sendCommand({ tabId }, "Page.enable", {}, () =>
+        resolve(!chrome.runtime.lastError)
+      );
+    });
+    await session.page;
+  }
 }
 
 const NET_RING_LIMIT = 100;
+const DIALOG_RING_LIMIT = 20;
+
+function dialogStore(tabId) {
+  let d = dialogStores.get(tabId);
+  if (!d) {
+    d = { recent: [], pending: null, policy: { action: "accept" } };
+    dialogStores.set(tabId, d);
+  }
+  return d;
+}
 
 function netStore(tabId) {
   let s = netStores.get(tabId);
@@ -275,6 +296,27 @@ function netStore(tabId) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (!debuggerSessions.has(tabId)) return; // solo tabs con debugger nuestro
+  if (method === "Page.javascriptDialogOpening") {
+    // un diálogo abierto bloquea CDP: se auto-responde con la política del tab (default accept)
+    const d = dialogStore(tabId);
+    const pending = {
+      type: params.type,
+      message: params.message,
+      defaultPrompt: params.defaultPrompt,
+      ts: Date.now(),
+    };
+    d.recent.push(pending);
+    while (d.recent.length > DIALOG_RING_LIMIT) d.recent.shift();
+    d.pending = pending;
+    const resp = { accept: d.policy.action === "accept" };
+    if (resp.accept && d.policy.promptText !== undefined) resp.promptText = d.policy.promptText;
+    chrome.debugger.sendCommand({ tabId }, "Page.handleJavaScriptDialog", resp, () => {
+      pending.handled = d.policy.action;
+      if (d.pending === pending) d.pending = null;
+      void chrome.runtime.lastError;
+    });
+    return;
+  }
   const s = netStore(tabId);
   if (method === "Network.requestWillBeSent") {
     s.order.push(params.requestId);
@@ -317,6 +359,7 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
   netStores.delete(tabId);
+  dialogStores.delete(tabId);
   detachDebugger(tabId);
   serializeMutation(() => chrome.storage.session.get(ATTACHMENTS).then(({ [ATTACHMENTS]: attachments = {} }) => {
       delete attachments[String(tabId)];
@@ -331,6 +374,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url || info.status === "loading") {
     refStores.delete(tabId);
     netStores.delete(tabId);
+    dialogStores.delete(tabId);
   }
   if (!info.url) return;
   serializeMutation(async () => {
@@ -810,6 +854,34 @@ async function toolUpload(args) {
   return { uploaded: args.files.length, files: args.files };
 }
 
+async function toolListDialogs(args) {
+  const tabId = await resolveTabId(args);
+  const d = dialogStores.get(tabId);
+  return {
+    pending: d?.pending ?? null,
+    recent: d?.recent ?? [],
+    policy: d?.policy ?? { action: "accept" },
+  };
+}
+
+async function toolHandleDialog(args) {
+  requireArg(args, "action");
+  const tabId = await resolveTabId(args);
+  const d = dialogStore(tabId);
+  const action = args.action === "dismiss" ? "dismiss" : "accept";
+  d.policy = { action };
+  if (args.prompt_text !== undefined) d.policy.promptText = args.prompt_text;
+  const pending = d.pending;
+  if (pending) {
+    const params = { accept: action === "accept" };
+    if (params.accept && args.prompt_text !== undefined) params.promptText = args.prompt_text;
+    await cdp(tabId, "Page.handleJavaScriptDialog", params);
+    pending.handled = action;
+    d.pending = null;
+  }
+  return { policy: d.policy, answered_pending: !!pending };
+}
+
 async function toolListNetwork(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -879,6 +951,8 @@ const TOOLS = {
   select: toolSelect,
   scroll: toolScroll,
   upload: toolUpload,
+  list_dialogs: toolListDialogs,
+  handle_dialog: toolHandleDialog,
   list_network: toolListNetwork,
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,

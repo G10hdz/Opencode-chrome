@@ -90,6 +90,18 @@ export const TOOLS = [
     schema: { ref, files: z.array(z.string()).min(1), tabId },
   },
   {
+    name: "list_dialogs",
+    description:
+      "JavaScript dialogs (alert/confirm/prompt/beforeunload) on the tab: the pending one if any, plus recently auto-handled ones and the current policy.",
+    schema: { tabId },
+  },
+  {
+    name: "handle_dialog",
+    description:
+      "Set how JS dialogs are auto-answered on the tab: action accept (default) or dismiss, optional prompt_text for prompt() dialogs. If a dialog is pending right now, it is answered with these settings.",
+    schema: { action: z.enum(["accept", "dismiss"]), prompt_text: z.string().optional(), tabId },
+  },
+  {
     name: "list_network",
     description:
       "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. Optional filter matches substring of url.",
