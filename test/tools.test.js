@@ -1,6 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -36,6 +37,7 @@ const EXPECTED_TOOLS = [
   'snapshot',
   'type',
   'upload',
+  'wait_download',
   'wait_for',
 ];
 
@@ -720,6 +722,24 @@ test('list_frames and frame-scoped snapshot roundtrip through fake extension', a
   assert.match(outcome(out).text, /pay\.example\.com/);
   const snap = await bridge.callTool('snapshot', { frame: 'pay.example.com' });
   assert.match(outcome(snap).text, /frame-tree/);
+});
+
+test('wait_download returns the saved path plus a bridge-computed sha256', async (t) => {
+  const file = join(mkdtempSync(join(tmpdir(), 'oc-dl-')), 'report.pdf');
+  writeFileSync(file, 'pdf-bytes');
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    if (msg.tool === 'wait_download') {
+      reply({
+        id: msg.id,
+        result: { id: 9, path: file, filename: 'report.pdf', bytes: 9, mime: 'application/pdf', url: 'https://a/x.pdf', exists: true },
+      });
+    }
+  });
+  t.after(() => ws.close());
+  const out = JSON.parse(outcome(await bridge.callTool('wait_download', { timeout_ms: 5000 })).text);
+  assert.equal(out.path, file);
+  assert.equal(out.sha256, createHash('sha256').update('pdf-bytes').digest('hex'));
 });
 
 test('bridge sends an empty allowlist when no policy file exists', async (t) => {

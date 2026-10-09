@@ -32,6 +32,7 @@ async function worker() {
     runtime: { onMessage: event('message') },
     alarms: { create() {}, onAlarm: event('alarm') },
     debugger: { onDetach: event('detach'), onEvent: event('cdpEvent') },
+    downloads: { search: async () => [] },
   };
   const ctx = {
     ...policy, chrome, WebSocket: Socket,
@@ -331,6 +332,51 @@ test('resolveFrameSession gates OOPIF access on the attachment allowlist', async
   // ambiguo y desconocido -> frame_not_found
   await assert.rejects(w.ctx.resolveFrameSession(7, 'dup.example.com'), (e) => e.errorCode === 'frame_not_found');
   await assert.rejects(w.ctx.resolveFrameSession(7, 'nope'), (e) => e.errorCode === 'frame_not_found');
+});
+
+test('wait_download polls chrome.downloads until a recent item completes', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const now = new Date().toISOString();
+  const item = {
+    id: 9, state: 'in_progress', filename: '/tmp/x.pdf', fileSize: 4,
+    mime: 'application/pdf', url: 'https://a/x.pdf', startTime: now, exists: false,
+  };
+  w.chrome.downloads.search = async (q) => (q.id === 9 ? [item] : [item]);
+  w.sockets[0].receive({ id: 1, tool: 'wait_download', args: { tabId: 7, timeout_ms: 5000 } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent.length, 0);
+  item.state = 'complete';
+  item.exists = true;
+  await w.fire(200);
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[0].result.path, '/tmp/x.pdf');
+  assert.equal(w.sockets[0].sent[0].result.filename, 'x.pdf');
+});
+
+test('wait_download maps an interrupted download to download_interrupted', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const now = new Date().toISOString();
+  const item = {
+    id: 9, state: 'interrupted', error: 'NETWORK_FAILED', filename: '/tmp/x.pdf',
+    startTime: now, endTime: now,
+  };
+  w.chrome.downloads.search = async () => [item];
+  w.sockets[0].receive({ id: 1, tool: 'wait_download', args: { tabId: 7, timeout_ms: 5000 } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[0].error.error_code, 'download_interrupted');
 });
 
 test('events from a retired socket do not close the current connection', async () => {
