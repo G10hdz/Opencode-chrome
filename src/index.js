@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -84,6 +84,49 @@ function loadPolicy() {
 const POLICY = loadPolicy();
 if (Object.keys(POLICY.origin_allowlist).length)
   console.error(`opencode-chrome: origin allowlist for ${Object.keys(POLICY.origin_allowlist).length} origin(s)`);
+
+// Site adapters (PARITY_SPEC 16): JSON en ~/.config/opencode-chrome/adapters/.
+// El modelo elige qué receta correr; el JS de `eval` vive solo en archivos del
+// usuario — nunca llega al modelo como herramienta de eval libre.
+const ADAPTERS_DIR =
+  process.env.OPENCODE_CHROME_ADAPTERS ||
+  join(homedir(), ".config", "opencode-chrome", "adapters");
+
+function loadRecipe(name) {
+  if (typeof name !== "string" || !/^[a-z0-9][a-z0-9_-]*$/i.test(name)) return null;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(join(ADAPTERS_DIR, `${name}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+  const origin = raw && typeof raw.origin === "string" ? validOrigin(raw.origin) : null;
+  if (
+    !origin || typeof raw.name !== "string" ||
+    !Array.isArray(raw.steps) || raw.steps.length === 0
+  )
+    return null;
+  raw.origin = origin;
+  return raw;
+}
+
+function listRecipes() {
+  let files;
+  try {
+    files = readdirSync(ADAPTERS_DIR).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  return files
+    .map((f) => loadRecipe(f.slice(0, -5)))
+    .filter(Boolean)
+    .map((r) => ({
+      name: r.name,
+      origin: r.origin,
+      description: r.description ?? null,
+      params: Array.isArray(r.params) ? r.params : [],
+    }));
+}
 
 const TOKEN = loadToken();
 const copied = process.env.OPENCODE_CHROME_TOKEN ? false : copyToClipboard(TOKEN);
@@ -220,6 +263,20 @@ process.stdin.once("end", () => {
 
 registerTools(server, async (tool, args) => {
   try {
+    if (tool === "list_recipes")
+      return { content: [{ type: "text", text: JSON.stringify({ recipes: listRecipes() }) }] };
+    if (tool === "run_recipe") {
+      const recipe = loadRecipe(args?.name);
+      if (!recipe) {
+        const error = {
+          message: `unknown recipe: ${args?.name}`,
+          error_code: "unknown_recipe",
+          remedy: "run list_recipes, or create ~/.config/opencode-chrome/adapters/<name>.json",
+        };
+        return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
+      }
+      args = { ...args, recipe };
+    }
     const result = await callExtension(tool, args);
     if (tool === "wait_download" && result && typeof result.path === "string") {
       try {

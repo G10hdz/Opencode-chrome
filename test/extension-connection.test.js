@@ -379,6 +379,40 @@ test('wait_download maps an interrupted download to download_interrupted', async
   assert.equal(w.sockets[0].sent[0].error.error_code, 'download_interrupted');
 });
 
+test('run_recipe gates on the attached origin and runs steps with escaped params', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.ctx.toolNavigate = async () => ({ url: 'ok' });
+  w.ctx.toolWaitFor = async () => ({ found: true });
+  let evalExpr = null;
+  w.ctx.evaluate = async (tabId, expr) => { evalExpr = expr; return [{ rank: '1', title: 'x', extra: 'drop' }]; };
+  const recipe = {
+    name: 'hn', origin: 'https://app.example.com',
+    steps: [
+      { navigate: 'https://app.example.com/' },
+      { wait_for: 'ready' },
+      { eval: 'search({{q}})' },
+      { columns: ['rank', 'title'] },
+    ],
+  };
+  w.sockets[0].receive({ id: 1, tool: 'run_recipe', args: { tabId: 7, recipe, params: { q: 'a"b' } } });
+  await setImmediate();
+  await setImmediate();
+  const sent = w.sockets[0].sent[0];
+  assert.equal(evalExpr, 'search("a\\"b")');
+  assert.deepEqual(sent.result.output, { columns: ['rank', 'title'], rows: [{ rank: '1', title: 'x' }] });
+  // origen fuera del alcance de la attachment -> origin_not_allowed
+  const bad = { ...recipe, origin: 'https://evil.example.com' };
+  w.sockets[0].receive({ id: 2, tool: 'run_recipe', args: { tabId: 7, recipe: bad } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[1].error.error_code, 'origin_not_allowed');
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];

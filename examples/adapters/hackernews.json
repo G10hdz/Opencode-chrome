@@ -1,0 +1,12 @@
+{
+  "name": "hackernews",
+  "origin": "https://news.ycombinator.com",
+  "description": "Front page stories: rank, title, url, points",
+  "steps": [
+    { "navigate": "https://news.ycombinator.com/" },
+    {
+      "eval": "Array.from(document.querySelectorAll('tr.athing')).map(tr => { const sub = tr.nextElementSibling; return { rank: tr.querySelector('.rank')?.innerText ?? '', title: tr.querySelector('.titleline a')?.innerText ?? '', url: tr.querySelector('.titleline a')?.href ?? '', points: sub?.querySelector('.score')?.innerText ?? '' }; })"
+    },
+    { "columns": ["rank", "title", "url", "points"] }
+  ]
+}

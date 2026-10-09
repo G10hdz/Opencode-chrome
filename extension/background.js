@@ -1305,6 +1305,60 @@ async function toolWaitDownload(args = {}) {
   );
 }
 
+// Adapters validados bridge-side (~/.config/opencode-chrome/adapters/). El origen
+// de la receta debe caer dentro del alcance de la attachment — misma frontera que
+// SSO redirects y OOPIFs. El JS de `eval` lo escribió el usuario en su disco; el
+// modelo solo pasa params, interpolados como literales JSON en steps eval
+// (imposible romper el contexto del script con un valor).
+function recipeInterp(template, params, jsonEncode) {
+  return String(template).replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    if (!params || !(key in params))
+      fail(
+        "invalid_recipe",
+        `declare "${key}" in the adapter's params and pass it to run_recipe`,
+        `run_recipe: param no provisto: ${key}`
+      );
+    return jsonEncode ? JSON.stringify(String(params[key])) : String(params[key]);
+  });
+}
+
+async function toolRunRecipe(args) {
+  const recipe = args?.recipe;
+  if (
+    !recipe || typeof recipe.name !== "string" || typeof recipe.origin !== "string" ||
+    !Array.isArray(recipe.steps) || !recipe.steps.length
+  )
+    fail("invalid_recipe", "fix the adapter JSON in ~/.config/opencode-chrome/adapters/", "run_recipe: receta malformada");
+  const tabId = await resolveTabId(args);
+  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const attachedOrigin = attachments[String(tabId)]?.origin;
+  if (!attachedOrigin || !originAllowed(attachedOrigin, `${recipe.origin}/`, originAllowlist))
+    fail(
+      "origin_not_allowed",
+      "the recipe's origin is outside this attachment's reach; attach a tab on that origin or extend origin_allowlist in ~/.config/opencode-chrome/policy.json",
+      `run_recipe: origen no permitido: ${recipe.origin}`
+    );
+  const params = args.params && typeof args.params === "object" ? args.params : {};
+  let out = null;
+  for (const step of recipe.steps) {
+    if (typeof step.navigate === "string")
+      out = await toolNavigate({ url: recipeInterp(step.navigate, params), tabId });
+    else if (typeof step.wait_for === "string")
+      out = await toolWaitFor({ text: recipeInterp(step.wait_for, params), timeout: step.timeout, tabId });
+    else if (typeof step.eval === "string")
+      out = await evaluate(tabId, recipeInterp(step.eval, params, true));
+    else if (Array.isArray(step.columns))
+      out = {
+        columns: step.columns,
+        rows: (Array.isArray(out) ? out : []).map((row) =>
+          Object.fromEntries(step.columns.map((c) => [c, row?.[c]]))
+        ),
+      };
+    else fail("invalid_recipe", `unknown step: ${JSON.stringify(step)}`, "run_recipe: step desconocido");
+  }
+  return { name: recipe.name, output: out };
+}
+
 // Árbol de frames del tab: los OOPIFs (cross-origin, sesión hija del auto-attach)
 // reportan su sessionId y si su origen está en la allowlist del origen attached.
 // Sirve para descubrir qué pasarle a `frame` en snapshot/find/read_text.
@@ -1360,6 +1414,7 @@ const TOOLS = {
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
   wait_download: toolWaitDownload,
+  run_recipe: toolRunRecipe,
 };
 
 async function handle(tool, args) {

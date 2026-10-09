@@ -27,10 +27,12 @@ const EXPECTED_TOOLS = [
   'list_dialogs',
   'list_frames',
   'list_network',
+  'list_recipes',
   'list_tabs',
   'navigate',
   'new_tab',
   'read_text',
+  'run_recipe',
   'screenshot',
   'scroll',
   'select',
@@ -740,6 +742,37 @@ test('wait_download returns the saved path plus a bridge-computed sha256', async
   const out = JSON.parse(outcome(await bridge.callTool('wait_download', { timeout_ms: 5000 })).text);
   assert.equal(out.path, file);
   assert.equal(out.sha256, createHash('sha256').update('pdf-bytes').digest('hex'));
+});
+
+test('list_recipes reads adapters locally and run_recipe forwards the recipe', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-adapters-'));
+  writeFileSync(join(dir, 'hackernews.json'), JSON.stringify({
+    name: 'hackernews',
+    origin: 'https://news.ycombinator.com',
+    description: 'front page',
+    params: ['q'],
+    steps: [{ navigate: 'https://news.ycombinator.com/' }, { eval: 'document.title' }],
+  }));
+  writeFileSync(join(dir, 'broken.json'), '{not json');
+  writeFileSync(join(dir, 'noorigin.json'), JSON.stringify({ name: 'x', steps: [{ eval: '1' }] }));
+  const bridge = await startBridge(t, { OPENCODE_CHROME_ADAPTERS: dir });
+  const list = JSON.parse(outcome(await bridge.callTool('list_recipes')).text);
+  assert.deepEqual(list.recipes, [
+    { name: 'hackernews', origin: 'https://news.ycombinator.com', description: 'front page', params: ['q'] },
+  ]);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    if (msg.tool === 'run_recipe') {
+      assert.equal(msg.args.recipe.origin, 'https://news.ycombinator.com');
+      assert.equal(msg.args.params.q, 'v');
+      reply({ id: msg.id, result: { name: 'hackernews', output: { columns: ['title'], rows: [] } } });
+    }
+  });
+  t.after(() => ws.close());
+  const out = JSON.parse(outcome(await bridge.callTool('run_recipe', { name: 'hackernews', params: { q: 'v' } })).text);
+  assert.equal(out.name, 'hackernews');
+  const missing = outcome(await bridge.callTool('run_recipe', { name: 'no-such' }));
+  assert.equal(missing.isError, true);
+  assert.match(missing.text, /unknown_recipe/);
 });
 
 test('bridge sends an empty allowlist when no policy file exists', async (t) => {

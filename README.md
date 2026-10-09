@@ -85,6 +85,35 @@ The bridge pushes the allowlist to the extension on connect (env override:
 `OPENCODE_CHROME_POLICY`). Entries apply per attached origin and are not
 symmetric; with no file the policy is strict exact-origin.
 
+## Site adapters
+
+Declarative per-origin recipes live in `~/.config/opencode-chrome/adapters/`
+(env override: `OPENCODE_CHROME_ADAPTERS`). `list_recipes` enumerates them;
+`run_recipe(name, params?)` executes one on an attached tab. The adapter's
+`origin` must be inside the attachment's reach — exact match or allowlisted,
+same rule as SSO redirects and OOPIF frames.
+
+```json
+{
+  "name": "example",
+  "origin": "https://app.example.com",
+  "params": ["q"],
+  "steps": [
+    { "navigate": "https://app.example.com/search?q={{q}}" },
+    { "wait_for": "Results" },
+    { "eval": "Array.from(document.querySelectorAll('.row')).map(r => ({title: r.innerText}))" },
+    { "columns": ["title"] }
+  ]
+}
+```
+
+Steps: `navigate`, `wait_for` (+ optional `timeout`), `eval`, `columns`.
+`{{key}}` placeholders come from `params`; inside `eval` each placeholder is
+substituted as a JSON-encoded literal (write `search({{q}})`, no quotes) so a
+param value can never break out of the script's context. The `eval` JS lives
+only in files you install — there is no free-form eval tool. See
+`examples/adapters/hackernews.json`.
+
 ## Tools
 
 | Tool | What it does |
@@ -110,6 +139,7 @@ symmetric; with no file the policy is strict exact-origin.
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |
 | `wait_for(text, timeout?)` | poll page text until it appears |
 | `wait_download(timeout_ms?)` | wait for a download; returns saved path, bytes, mime and sha256 |
+| `list_recipes` / `run_recipe(name, params?)` | site adapters from `~/.config/opencode-chrome/adapters/` |
 
 ## Notes
 
