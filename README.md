@@ -138,6 +138,7 @@ only in files you install — there is no free-form eval tool. See
 | `scroll(ref? or dx/dy)` | scroll element into view or page by deltas |
 | `upload(ref, paths)` | set files on a file input via CDP |
 | `list_network` / `get_network_body(id)` | captured requests and response bodies |
+| `list_console_messages` | console calls, uncaught exceptions and browser log entries; `types`/`filter` scope it |
 | `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |
 | `wait_for(text, timeout?)` | poll page text until it appears |

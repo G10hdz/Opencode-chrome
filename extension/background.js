@@ -15,6 +15,7 @@ let connectionAttempt = 0;
 let connected = false;
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
 const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring buffer de red
+const consoleStores = new Map(); // tabId -> { entries: [] } ring buffer de consola
 const dialogStores = new Map(); // tabId -> { recent: [], pending, policy } de diálogos JS
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
 // OOPIFs = iframes cross-origin auto-attachados como sesiones hijas (flatten); el
@@ -291,6 +292,22 @@ async function ensureAttached(tabId) {
     });
     await session.page;
   }
+  // Runtime+Log una vez por sesión: llenan el ring buffer de consola vía onEvent
+  if (!session.console) {
+    session.console = Promise.all([
+      new Promise((resolve) => {
+        chrome.debugger.sendCommand({ tabId }, "Runtime.enable", {}, () =>
+          resolve(!chrome.runtime.lastError)
+        );
+      }),
+      new Promise((resolve) => {
+        chrome.debugger.sendCommand({ tabId }, "Log.enable", {}, () =>
+          resolve(!chrome.runtime.lastError)
+        );
+      }),
+    ]);
+    await session.console;
+  }
   // autoAttach flatten: los OOPIFs se attachan como sesiones hijas en este canal;
   // sus eventos y comandos viajan con sessionId en el mismo debugger
   if (!session.autoAttach) {
@@ -316,7 +333,23 @@ function frameStore(tabId) {
 }
 
 const NET_RING_LIMIT = 100;
+const CONSOLE_RING_LIMIT = 200;
 const DIALOG_RING_LIMIT = 20;
+
+function consoleStore(tabId) {
+  let c = consoleStores.get(tabId);
+  if (!c) {
+    c = { entries: [] };
+    consoleStores.set(tabId, c);
+  }
+  return c;
+}
+
+function pushConsole(tabId, entry) {
+  const c = consoleStore(tabId);
+  c.entries.push(entry);
+  while (c.entries.length > CONSOLE_RING_LIMIT) c.entries.shift();
+}
 
 function dialogStore(tabId) {
   let d = dialogStores.get(tabId);
@@ -346,6 +379,39 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
   if (method === "Target.detachedFromTarget") {
     frameSessions.get(tabId)?.delete(params.sessionId);
+    return;
+  }
+  if (method === "Runtime.consoleAPICalled") {
+    // RemoteObject preview: value para primitivos, description para objetos
+    const text = (params.args ?? [])
+      .map((a) => String(a.value ?? a.description ?? a.type ?? "").slice(0, 200))
+      .join(" ")
+      .slice(0, 2000);
+    pushConsole(tabId, { type: params.type ?? "log", source: "console", text, ts: params.timestamp });
+    return;
+  }
+  if (method === "Runtime.exceptionThrown") {
+    const d = params.exceptionDetails ?? {};
+    pushConsole(tabId, {
+      type: "error",
+      source: "exception",
+      text: String(d.exception?.description || d.text || "uncaught").slice(0, 2000),
+      url: d.url,
+      line: d.lineNumber,
+      ts: params.timestamp,
+    });
+    return;
+  }
+  if (method === "Log.entryAdded") {
+    const e = params.entry ?? {};
+    pushConsole(tabId, {
+      type: e.level === "warning" ? "warn" : e.level ?? "info",
+      source: e.source ?? "log",
+      text: String(e.text ?? "").slice(0, 2000),
+      url: e.url,
+      line: e.lineNumber,
+      ts: e.timestamp,
+    });
     return;
   }
   if (method === "Page.javascriptDialogOpening") {
@@ -413,6 +479,7 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
   netStores.delete(tabId);
+  consoleStores.delete(tabId);
   frameSessions.delete(tabId);
   dialogStores.delete(tabId);
   detachDebugger(tabId);
@@ -429,6 +496,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.url || info.status === "loading") {
     refStores.delete(tabId);
     netStores.delete(tabId);
+    consoleStores.delete(tabId);
     dialogStores.delete(tabId);
     frameSessions.delete(tabId);
   }
@@ -1488,6 +1556,19 @@ async function toolHandleDialog(args) {
   return { policy: d.policy, answered_pending: !!pending };
 }
 
+// console: ring buffer por tab (Runtime.consoleAPICalled + exceptionThrown +
+// Log.entryAdded, llenado por onEvent). types filtra por tipo exacto,
+// filter por substring del texto.
+async function toolListConsoleMessages(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  let rows = consoleStores.get(tabId)?.entries ?? [];
+  if (Array.isArray(args.types) && args.types.length)
+    rows = rows.filter((m) => args.types.includes(m.type));
+  if (args.filter) rows = rows.filter((m) => m.text.includes(args.filter));
+  return { messages: rows };
+}
+
 async function toolListNetwork(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -1741,6 +1822,7 @@ const TOOLS = {
   list_dialogs: toolListDialogs,
   handle_dialog: toolHandleDialog,
   list_network: toolListNetwork,
+  list_console_messages: toolListConsoleMessages,
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
