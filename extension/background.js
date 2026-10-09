@@ -500,12 +500,16 @@ async function toolFill(args) {
     `(() => {
       const el = document.querySelector(${JSON.stringify(sel)});
       if (!el) return { filled: false, verified: false, actual: null, error: "not_found" };
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      if (el.tagName === "INPUT" && ["checkbox", "radio", "file", "hidden", "submit", "button", "reset", "image"].includes(type)) {
+        return { filled: false, verified: false, actual: null, error: "unsupported_input_type:" + type };
+      }
       el.scrollIntoView({ block: "center" });
       el.focus();
       const value = ${JSON.stringify(args.value)};
       if (el.isContentEditable) {
         el.textContent = value;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
         return { filled: true, verified: el.textContent === value, actual: el.textContent };
       }
       const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype
@@ -513,8 +517,8 @@ async function toolFill(args) {
         : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
       setter.call(el, value);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       return { filled: true, verified: el.value === value, actual: el.value };
     })()`
   );
