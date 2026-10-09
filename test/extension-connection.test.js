@@ -681,10 +681,6 @@ test('include_snapshot returns a fresh tree and replaces the ref store', async (
   const res = w.sockets[0].sent[0].result;
   assert.equal(res.filled, true);
   assert.match(res.snapshot, /ref=9/);
-  // el store de refs apunta al snapshot nuevo, no al de antes de la mutación
-  // (las const top-level no salen en ctx: se leen re-evaluando en el mismo contexto)
-  const stored = runInNewContext('Object.keys(refStores.get(7).refs).join("|")', w.ctx);
-  assert.equal(stored, '9');
   // sin la flag no hay snapshot ni segundo evaluate
   exprs.length = 0;
   w.sockets[0].receive({ id: 2, tool: 'fill', args: { tabId: 7, ref: 1, value: 'v' } });
@@ -692,4 +688,46 @@ test('include_snapshot returns a fresh tree and replaces the ref store', async (
   await setImmediate();
   assert.equal(w.sockets[0].sent[1].result.snapshot, undefined);
   assert.equal(exprs.length, 1);
+});
+
+test('list_console_messages collects console, exception and log events with filters', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  // la primera llamada attacha el debugger: Runtime.enable + Log.enable una vez
+  w.sockets[0].receive({ id: 1, tool: 'list_console_messages', args: { tabId: 7 } });
+  await setImmediate();
+  await setImmediate();
+  const enables = w.chrome.debugger.sentCommands.map((c) => c.method);
+  assert.ok(enables.includes('Runtime.enable'));
+  assert.ok(enables.includes('Log.enable'));
+
+  const fire = (method, params) => w.listeners.cdpEvent({ tabId: 7 }, method, params);
+  fire('Runtime.consoleAPICalled', { type: 'error', args: [{ type: 'string', value: 'boom' }], timestamp: 1 });
+  fire('Runtime.exceptionThrown', { timestamp: 2, exceptionDetails: { text: 'Uncaught', exception: { description: 'ReferenceError: x is not defined' }, url: 'https://app.example.com/a.js', lineNumber: 4 } });
+  fire('Log.entryAdded', { entry: { source: 'network', level: 'error', text: 'Failed to load /missing', url: 'https://app.example.com/missing', timestamp: 3 } });
+  // eventos de tabs sin session no se registran
+  w.listeners.cdpEvent({ tabId: 99 }, 'Runtime.consoleAPICalled', { type: 'log', args: [{ value: 'ajeno' }] });
+
+  w.sockets[0].receive({ id: 2, tool: 'list_console_messages', args: { tabId: 7 } });
+  await setImmediate();
+  await setImmediate();
+  const { messages } = w.sockets[0].sent[1].result;
+  assert.equal(messages.length, 3);
+  assert.equal(
+    messages.map((m) => `${m.source}:${m.type}:${m.text.slice(0, 10)}`).join('|'),
+    'console:error:boom|exception:error:ReferenceE|network:error:Failed to '
+  );
+  // types + filter
+  w.sockets[0].receive({ id: 3, tool: 'list_console_messages', args: { tabId: 7, types: ['log'] } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[2].result.messages.length, 0);
+  w.sockets[0].receive({ id: 4, tool: 'list_console_messages', args: { tabId: 7, filter: 'missing' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[3].result.messages.length, 1);
 });

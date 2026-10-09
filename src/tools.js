@@ -170,6 +170,12 @@ export const TOOLS = [
     schema: { tabId, filter: z.string().optional() },
   },
   {
+    name: "list_console_messages",
+    description:
+      "Recent console messages on the tab (ring buffer of ~200): console API calls, uncaught exceptions and browser log entries (network errors, deprecations). Each entry: {type, source, text, url?, line?, ts}. Optional types array filters by exact type (log, error, warn, info, debug...), filter matches a substring of the text.",
+    schema: { tabId, types: z.array(z.string()).optional(), filter: z.string().optional() },
+  },
+  {
     name: "get_network_body",
     description:
       "Fetch the response body of a requestId seen in list_network. Text bodies over ~200KB are truncated; binary comes back base64Encoded. output_path writes the body to a file and returns {path, bytes} instead.",

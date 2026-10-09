@@ -26,6 +26,7 @@ const EXPECTED_TOOLS = [
   'get_network_body',
   'handle_dialog',
   'hover',
+  'list_console_messages',
   'list_dialogs',
   'list_frames',
   'list_network',
