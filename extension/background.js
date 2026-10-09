@@ -458,6 +458,41 @@ async function toolType(args) {
   return {};
 }
 
+// fill: setter nativo del prototipo + input/change con bubbles (React/Vue
+// controlled inputs no se revierten), contenteditable via textContent, y
+// read-back para detectar campos que comen caracteres en silencio
+async function toolFill(args) {
+  requireArg(args, "ref");
+  requireArg(args, "value");
+  const tabId = await resolveTabId(args);
+  const sel = await resolveRef(tabId, args.ref);
+  const out = await evaluate(
+    tabId,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return { filled: false, verified: false, actual: null, error: "not_found" };
+      el.scrollIntoView({ block: "center" });
+      el.focus();
+      const value = ${JSON.stringify(args.value)};
+      if (el.isContentEditable) {
+        el.textContent = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return { filled: true, verified: el.textContent === value, actual: el.textContent };
+      }
+      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype
+        : el.tagName === "SELECT" ? HTMLSelectElement.prototype
+        : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+      setter.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { filled: true, verified: el.value === value, actual: el.value };
+    })()`
+  );
+  if (!out.filled) throw new Error(`fill: ${out.error || "could not set value"}`);
+  return out;
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -491,6 +526,7 @@ const TOOLS = {
   snapshot: toolSnapshot,
   click: toolClick,
   type: toolType,
+  fill: toolFill,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
 };
