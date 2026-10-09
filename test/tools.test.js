@@ -231,6 +231,21 @@ test('tool call roundtrips result through fake extension', async (t) => {
   assert.match(text, /example\.test/);
 });
 
+test('click roundtrips the trusted-click result through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'click');
+    assert.equal(msg.args.ref, 3);
+    reply({ id: msg.id, result: { clicked: true, x: 120, y: 40, obscured: false } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('click', { ref: 3 }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.clicked, true);
+  assert.equal(result.obscured, false);
+});
+
 test('extension error propagates to tool result', async (t) => {
   const bridge = await startBridge(t);
   const ws = await connectExtension(bridge.port, (msg, reply) => {

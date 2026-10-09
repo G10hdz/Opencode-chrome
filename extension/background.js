@@ -431,11 +431,27 @@ async function toolClick(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
   const sel = await resolveRef(tabId, args.ref);
-  await evaluate(
+  const point = await evaluate(
     tabId,
-    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.click(); return true; })()`
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return null;
+      el.scrollIntoView({block:"center"});
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return null;
+      const top = document.elementFromPoint(x, y);
+      return { x, y, obscured: !!top && !el.contains(top) && !top.contains(el) };
+    })()`
   );
-  return {};
+  if (!point) throw new Error(`click: element not found or not visible: ${sel}`);
+  const at = { x: point.x, y: point.y, button: "left", clickCount: 1 };
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at });
+  return { clicked: true, x: point.x, y: point.y, obscured: point.obscured };
 }
 
 // estrategia type: focus via evaluate + Input.insertText (respeta eventos/input method), Enter como keyDown text="\r" + keyUp
