@@ -30,7 +30,7 @@ async function worker(localStore = { token: 'test-token' }) {
     storage: { local: { get: async () => ({ ...localStore }) }, session: { get: async () => ({}) } },
     tabs: { query: async () => [], onRemoved: event('removed'), onUpdated: event('updated') },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
-    runtime: { onMessage: event('message') },
+    runtime: { onMessage: event('message'), onInstalled: event('installed'), onStartup: event('startup') },
     alarms: { create() {}, onAlarm: event('alarm') },
     debugger: { onDetach: event('detach'), onEvent: event('cdpEvent') },
     downloads: { search: async () => [] },
@@ -54,6 +54,16 @@ async function worker(localStore = { token: 'test-token' }) {
     },
   };
 }
+
+test('install and browser startup wake the worker into a connect attempt', async () => {
+  for (const ev of ['installed', 'startup']) {
+    const w = await worker();
+    w.sockets[0].close();
+    w.listeners[ev]();
+    await setImmediate();
+    assert.equal(w.sockets.length, 2, `${ev} should reconnect`);
+  }
+});
 
 test('a stored port override drives the bridge URL', async () => {
   const w = await worker({ token: 'test-token', port: 55914 });
