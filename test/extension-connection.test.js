@@ -842,3 +842,53 @@ test('resize_page sets and clears device metrics override', async () => {
   await setImmediate();
   assert.equal(w.sockets[0].sent[2].error.error_code, 'missing_argument');
 });
+
+test('emulate applies environment overrides and clear resets them', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const sent = (m) => w.chrome.debugger.sentCommands.filter((c) => c.method === m).map((c) => c.params);
+  const flush = async () => { for (let i = 0; i < 4; i++) await setImmediate(); };
+
+  w.sockets[0].receive({
+    id: 1,
+    tool: 'emulate',
+    args: {
+      tabId: 7,
+      network: 'slow-3g',
+      cpu: 4,
+      color_scheme: 'dark',
+      reduced_motion: true,
+      geolocation: { latitude: 19.4, longitude: -99.1 },
+      user_agent: 'e2e-agent',
+    },
+  });
+  await flush();
+  const res = w.sockets[0].sent[0].result;
+  assert.equal(res.applied.network, 'slow-3g');
+  assert.equal(sent('Network.emulateNetworkConditions')[0].latency, 400);
+  assert.equal(sent('Emulation.setCPUThrottlingRate')[0].rate, 4);
+  const media = sent('Emulation.setEmulatedMedia')[0].features;
+  assert.equal(media.map((f) => `${f.name}=${f.value}`).join('|'), 'prefers-color-scheme=dark|prefers-reduced-motion=reduce');
+  assert.equal(sent('Emulation.setGeolocationOverride')[0].latitude, 19.4);
+  assert.equal(sent('Emulation.setUserAgentOverride')[0].userAgent, 'e2e-agent');
+
+  // preset desconocido y args vacíos -> invalid_argument
+  w.sockets[0].receive({ id: 2, tool: 'emulate', args: { tabId: 7, network: 'dialup' } });
+  await flush();
+  assert.equal(w.sockets[0].sent[1].error.error_code, 'invalid_argument');
+  w.sockets[0].receive({ id: 3, tool: 'emulate', args: { tabId: 7 } });
+  await flush();
+  assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
+
+  // clear:true resetea todos los overrides
+  w.sockets[0].receive({ id: 4, tool: 'emulate', args: { tabId: 7, clear: true } });
+  await flush();
+  assert.equal(w.sockets[0].sent[3].result.cleared, true);
+  assert.equal(sent('Emulation.setCPUThrottlingRate').at(-1).rate, 1);
+  assert.equal(sent('Network.emulateNetworkConditions').at(-1).offline, false);
+  assert.ok(w.chrome.debugger.sentCommands.some((c) => c.method === 'Emulation.clearGeolocationOverride'));
+});

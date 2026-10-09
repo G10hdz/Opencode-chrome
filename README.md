@@ -142,6 +142,7 @@ only in files you install — there is no free-form eval tool. See
 | `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |
 | `resize_page(width, height, clear?, tabId?)` | viewport override via CDP; persists while attached |
+| `emulate({network,cpu,geolocation,color_scheme,reduced_motion,user_agent,locale}, clear?)` | environment overrides per tab; `clear:true` resets |
 | `wait_for(text|text[], timeout?)` | poll page text until it appears; an array resolves on the first match |
 | `wait_download(timeout_ms?)` | wait for a download; returns saved path, bytes, mime and sha256 |
 | `list_recipes` / `run_recipe(name, params?)` | site adapters from `~/.config/opencode-chrome/adapters/` |
