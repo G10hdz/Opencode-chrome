@@ -60,6 +60,12 @@ export const TOOLS = [
     schema: { ref, option: z.string(), tabId },
   },
   {
+    name: "scroll",
+    description:
+      "Scroll the page. With ref, scrolls that element into view; with dx/dy, scrolls the window by that many pixels (default dy 600 down). Returns the new position and at_bottom.",
+    schema: { ref: ref.optional(), dx: z.number().optional(), dy: z.number().optional(), tabId },
+  },
+  {
     name: "screenshot",
     description: "Capture a PNG screenshot of the tab, returned as base64.",
     schema: { tabId },
