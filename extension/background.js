@@ -152,6 +152,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (!ws || ws.readyState === WebSocket.CLOSED) connect();
 });
 
+// Chrome arranca el worker para entregar estos eventos: es la única vía de
+// reconectar tras instalar o reiniciar el navegador sin un click del usuario.
+// connect() sale solo si no hay token configurado.
+chrome.runtime.onInstalled.addListener(() => connect());
+chrome.runtime.onStartup.addListener(() => connect());
+
 function send(socket, msg) {
   if (ws === socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
