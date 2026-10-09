@@ -441,12 +441,26 @@ function SNAPSHOT_SCRIPT(opts) {
     return s.replace(/\s+/g, " ").trim();
   };
 
+  // password/pago/identidad: el valor nunca sale al snapshot y los writes a su ref
+  // devuelven human_takeover_required. Devuelve la razón ("password"|"cc"|"credential") o false.
+  const isSensitive = (el) => {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "input" && tag !== "textarea") return false;
+    if ((el.type || "").toLowerCase() === "password") return "password";
+    if ((el.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) return "cc";
+    const probe = [
+      el.name, el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder"),
+      el.labels && el.labels[0] ? el.labels[0].innerText : "",
+    ].join(" ").toLowerCase().replace(/[-_]/g, " ");
+    return /\b(cvv|cvc|csc|ssn|social security|security code|card verification|tax id)\b/.test(probe) ? "credential" : false;
+  };
+
   const nameOf = (el) => {
     let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
     if (!name) {
       if (el.labels && el.labels[0]) name = el.labels[0].innerText;
       else if (el.type === "submit" || el.type === "button") name = el.value || "";
-      else name = el.innerText || el.value || el.placeholder || "";
+      else name = el.innerText || (isSensitive(el) ? "" : el.value) || el.placeholder || "";
     }
     return name.replace(/\s+/g, " ").trim().slice(0, 80);
   };
@@ -504,7 +518,10 @@ function SNAPSHOT_SCRIPT(opts) {
     const name = nameOf(el);
     if (name) parts.push(JSON.stringify(name));
     if (tag === "a" && el.getAttribute("href") != null) parts.push("href=" + JSON.stringify(el.getAttribute("href")));
-    if ((tag === "input" || tag === "textarea") && el.value) parts.push("value=" + JSON.stringify(String(el.value).slice(0, 80)));
+    const sensitive = isSensitive(el);
+    if ((tag === "input" || tag === "textarea") && el.value)
+      parts.push(sensitive ? 'value="[redacted]"' : "value=" + JSON.stringify(String(el.value).slice(0, 80)));
+    if (sensitive) parts.push("sensitive=" + sensitive);
     // compound controls: el envelope inline evita el round trip click→snapshot→click
     if (tag === "select") {
       const opts = [...el.options].map((o) => o.label || o.value);
@@ -543,6 +560,7 @@ function SNAPSHOT_SCRIPT(opts) {
       // {t:tag, n:name, r:role, c:classHash} — los tiers de resolveRef usan n/t para re-identificar.
       refs[refCount] = {
         sel: selectorFor(el),
+        sensitive: isSensitive(el),
         fp: {
           t: el.tagName.toLowerCase(),
           n: nameOf(el),
@@ -582,12 +600,23 @@ function REF_CHECK_SCRIPT(sel, fp) {
       if (cs.display === "none" || cs.visibility === "hidden") return false;
       return el.getClientRects().length > 0;
     };
+    const isSensitive = (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag !== "input" && tag !== "textarea") return false;
+      if ((el.type || "").toLowerCase() === "password") return "password";
+      if ((el.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) return "cc";
+      const probe = [
+        el.name, el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder"),
+        el.labels && el.labels[0] ? el.labels[0].innerText : "",
+      ].join(" ").toLowerCase().replace(/[-_]/g, " ");
+      return /\\b(cvv|cvc|csc|ssn|social security|security code|card verification|tax id)\\b/.test(probe) ? "credential" : false;
+    };
     const nameOf = (el) => {
       let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
       if (!name) {
         if (el.labels && el.labels[0]) name = el.labels[0].innerText;
         else if (el.type === "submit" || el.type === "button") name = el.value || "";
-        else name = el.innerText || el.value || el.placeholder || "";
+        else name = el.innerText || (isSensitive(el) ? "" : el.value) || el.placeholder || "";
       }
       return name.replace(/\\s+/g, " ").trim().slice(0, 80);
     };
@@ -631,15 +660,15 @@ function REF_CHECK_SCRIPT(sel, fp) {
     };
     const fpOf = (el) => el.tagName.toLowerCase() + "|" + nameOf(el);
     const el = document.querySelector(SEL);
-    if (el && fpOf(el) === FP.t + "|" + FP.n) return { found: true, level: "exact", sel: SEL };
+    if (el && fpOf(el) === FP.t + "|" + FP.n) return { found: true, level: "exact", sel: SEL, sensitive: isSensitive(el) };
     // re-identificar: tag+name único entre los interactivos visibles; role y classHash desempatan
     let cands = Array.prototype.filter.call(document.querySelectorAll(INTERACTIVE), (e) =>
       visible(e) && e.tagName.toLowerCase() === FP.t && nameOf(e) === FP.n
     );
     if (cands.length > 1) cands = cands.filter((e) => roleOf(e) === FP.r);
     if (cands.length > 1) cands = cands.filter((e) => hashStr(typeof e.className === "string" ? e.className : "") === FP.c);
-    if (cands.length === 1) return { found: true, level: "reidentified", sel: selectorFor(cands[0]) };
-    if (el) return { found: true, level: "stable", sel: SEL };
+    if (cands.length === 1) return { found: true, level: "reidentified", sel: selectorFor(cands[0]), sensitive: isSensitive(cands[0]) };
+    if (el) return { found: true, level: "stable", sel: SEL, sensitive: isSensitive(el) };
     return { found: false };
   })()`;
 }
@@ -698,15 +727,29 @@ async function toolNavigate(args) {
 }
 
 // Resuelve ref → { sel, level }. level: exact | reidentified | stable; stale_ref si no hay match.
+// Refs sensibles (password/pago/identidad) se rechazan aquí: el gate cubre toda acción por ref,
+// incluidas las tools de escritura futuras que pasen por resolveRef.
 async function resolveRef(tabId, ref) {
   const store = refStores.get(tabId);
   const entry = store && store.refs[ref];
   if (!entry)
     fail("stale_ref", "take a fresh snapshot and use a ref from it", "ref not found, take a new snapshot");
+  if (entry.sensitive)
+    fail(
+      "human_takeover_required",
+      "the field must be completed by the user; ask them to fill it in the page and confirm, then continue the task",
+      `ref ${ref} points to a sensitive field (${entry.sensitive}); agent input is blocked`
+    );
   await ensureAttached(tabId);
   const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp));
   if (!state.found)
     fail("stale_ref", "take a fresh snapshot and use a ref from it", "element for this ref is gone, take a new snapshot");
+  if (state.sensitive)
+    fail(
+      "human_takeover_required",
+      "the field must be completed by the user; ask them to fill it in the page and confirm, then continue the task",
+      `ref ${ref} now resolves to a sensitive field (${state.sensitive}); agent input is blocked`
+    );
   if (state.sel !== entry.sel) entry.sel = state.sel; // reidentified: adopta el selector nuevo
   return { sel: state.sel, level: state.level || "exact" };
 }

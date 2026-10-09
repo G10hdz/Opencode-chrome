@@ -69,6 +69,11 @@ is JSON-stringified into text.
   tab whose current exact origin matches its session attachment. Do not bypass
   this resolver with direct tab or debugger access.
 - The debugger auto-detaches after idle; navigation invalidates cached refs.
+- Sensitive fields (password, `autocomplete=cc-*`, CVV/SSN-labeled inputs) are
+  redacted in snapshots and any action on their ref fails with
+  `human_takeover_required`; the gate lives in `resolveRef` so every
+  ref-targeted tool inherits it. Keep `isSensitive` identical between
+  `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
 
 If a change touches any of these, call it out explicitly in the PR.
 

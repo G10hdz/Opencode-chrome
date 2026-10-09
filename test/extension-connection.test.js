@@ -255,6 +255,45 @@ test('snapshot options list caps at 50 and reports options_total', async () => {
   assert.doesNotMatch(selLine, /opt50/);
 });
 
+test('sensitive fields are redacted in snapshot and flagged in refs', async () => {
+  const w = await worker();
+  const pwd = fakeEl({ tagName: 'INPUT', type: 'password', name: 'pwd', value: 'hunter2', placeholder: '' });
+  const cc = fakeEl({
+    tagName: 'INPUT', type: 'text', name: 'card', value: '4111111111111111', placeholder: '',
+    getAttribute: (k) => (k === 'autocomplete' ? 'cc-number' : null),
+  });
+  const ssn = fakeEl({ tagName: 'INPUT', type: 'text', name: 'user_ssn', value: '', placeholder: '' });
+  const city = fakeEl({ tagName: 'INPUT', type: 'text', name: 'city', value: 'Xalapa', placeholder: '' });
+  const out = runSnapshot(w.ctx, [pwd, cc, ssn, city]);
+  assert.doesNotMatch(out.snapshot, /hunter2|4111111111111111/);
+  assert.match(out.snapshot, /sensitive=password/);
+  assert.match(out.snapshot, /sensitive=cc/);
+  assert.match(out.snapshot, /sensitive=credential/);
+  assert.match(out.snapshot, /value="\[redacted\]"/);
+  assert.match(out.snapshot, /value="Xalapa"/);
+  assert.equal(out.refs['1'].sensitive, 'password');
+  assert.equal(out.refs['4'].sensitive, false);
+});
+
+test('ref check reports sensitivity of the resolved element', async () => {
+  const w = await worker();
+  const pwd = fakeEl({ tagName: 'INPUT', type: 'password', name: 'pwd', id: 'pwd', value: 'x', placeholder: '' });
+  const fp = { t: 'input', n: '', r: 'textbox', c: hashStr('') };
+  const out = runInNewContext(w.ctx.REF_CHECK_SCRIPT('#pwd', fp), fakeDom([pwd], { '#pwd': pwd }));
+  assert.equal(out.level, 'exact');
+  assert.equal(out.sensitive, 'password');
+});
+
+test('actions on a sensitive ref fail with human_takeover_required', async () => {
+  const w = await worker();
+  runInNewContext(
+    'refStores.set(7, { refs: { 3: { sel: "#pwd", fp: { t: "input", n: "", r: "textbox", c: 0 }, sensitive: "password" } } })',
+    w.ctx
+  );
+  await assert.rejects(w.ctx.resolveRef(7, 3), (e) => e.errorCode === 'human_takeover_required');
+  await assert.rejects(w.ctx.resolveRef(7, 4), (e) => e.errorCode === 'stale_ref');
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];
