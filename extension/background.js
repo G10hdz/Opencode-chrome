@@ -456,11 +456,8 @@ async function toolSnapshot(args) {
   return { snapshot: out.snapshot };
 }
 
-async function toolClick(args) {
-  requireArg(args, "ref");
-  const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
-  const point = await evaluate(
+async function elementCenter(tabId, sel) {
+  return evaluate(
     tabId,
     `(() => {
       const el = document.querySelector(${JSON.stringify(sel)});
@@ -475,12 +472,48 @@ async function toolClick(args) {
       return { x, y, obscured: !!top && !el.contains(top) && !top.contains(el) };
     })()`
   );
+}
+
+async function toolClick(args) {
+  requireArg(args, "ref");
+  const tabId = await resolveTabId(args);
+  const sel = await resolveRef(tabId, args.ref);
+  const point = await elementCenter(tabId, sel);
   if (!point) throw new Error(`click: element not found or not visible: ${sel}`);
   const at = { x: point.x, y: point.y, button: "left", clickCount: 1 };
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at });
   return { clicked: true, x: point.x, y: point.y, obscured: point.obscured };
+}
+
+async function toolHover(args) {
+  requireArg(args, "ref");
+  const tabId = await resolveTabId(args);
+  const sel = await resolveRef(tabId, args.ref);
+  const point = await elementCenter(tabId, sel);
+  if (!point) throw new Error(`hover: element not found or not visible: ${sel}`);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  return { hovered: true, x: point.x, y: point.y, obscured: point.obscured };
+}
+
+async function toolDrag(args) {
+  requireArg(args, "from");
+  requireArg(args, "to");
+  const tabId = await resolveTabId(args);
+  const from = await elementCenter(tabId, await resolveRef(tabId, args.from));
+  if (!from) throw new Error(`drag: source ref not found or not visible`);
+  const to = await elementCenter(tabId, await resolveRef(tabId, args.to));
+  if (!to) throw new Error(`drag: target ref not found or not visible`);
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 });
+  for (let i = 1; i <= 3; i++) {
+    const x = from.x + ((to.x - from.x) * i) / 3;
+    const y = from.y + ((to.y - from.y) * i) / 3;
+    await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left" });
+  }
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
+  return { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
 }
 
 // estrategia type: focus via evaluate + Input.insertText (respeta eventos/input method), Enter como keyDown text="\r" + keyUp
@@ -630,6 +663,8 @@ const TOOLS = {
   navigate: toolNavigate,
   snapshot: toolSnapshot,
   click: toolClick,
+  hover: toolHover,
+  drag: toolDrag,
   type: toolType,
   fill: toolFill,
   select: toolSelect,

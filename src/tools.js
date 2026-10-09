@@ -42,6 +42,18 @@ export const TOOLS = [
     schema: { ref, tabId },
   },
   {
+    name: "hover",
+    description:
+      "Move the pointer over the element with the given ref (trusted mouseMoved over CDP). Useful for menus and tooltips.",
+    schema: { ref, tabId },
+  },
+  {
+    name: "drag",
+    description:
+      "Drag the element with ref `from` onto the element with ref `to`, as a trusted press-move-release mouse sequence.",
+    schema: { from: ref, to: ref, tabId },
+  },
+  {
     name: "type",
     description:
       "Type text into the element with the given ref; a trailing newline sends Enter.",
