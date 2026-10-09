@@ -657,3 +657,39 @@ test('press_key sends keyDown/keyUp with modifier bits and validates input', asy
   await setImmediate();
   assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
 });
+
+test('include_snapshot returns a fresh tree and replaces the ref store', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.ctx.resolveRef = async () => ({ sel: '#f1', level: 'exact', sessionId: undefined });
+  const exprs = [];
+  w.ctx.evaluate = async (tabId, expr) => {
+    exprs.push(expr);
+    if (expr.includes('getOwnPropertyDescriptor')) {
+      return { filled: true, verified: true, actual: 'v' };
+    }
+    // la segunda evaluación es el snapshot post-mutación
+    return { snapshot: 'page "p" "u"\n[ref=9] button "Save"', refs: { 9: { sel: '#save', fp: {} } } };
+  };
+  w.sockets[0].receive({ id: 1, tool: 'fill', args: { tabId: 7, ref: 1, value: 'v', include_snapshot: true } });
+  await setImmediate();
+  await setImmediate();
+  const res = w.sockets[0].sent[0].result;
+  assert.equal(res.filled, true);
+  assert.match(res.snapshot, /ref=9/);
+  // el store de refs apunta al snapshot nuevo, no al de antes de la mutación
+  // (las const top-level no salen en ctx: se leen re-evaluando en el mismo contexto)
+  const stored = runInNewContext('Object.keys(refStores.get(7).refs).join("|")', w.ctx);
+  assert.equal(stored, '9');
+  // sin la flag no hay snapshot ni segundo evaluate
+  exprs.length = 0;
+  w.sockets[0].receive({ id: 2, tool: 'fill', args: { tabId: 7, ref: 1, value: 'v' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[1].result.snapshot, undefined);
+  assert.equal(exprs.length, 1);
+});

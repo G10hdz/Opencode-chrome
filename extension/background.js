@@ -772,7 +772,8 @@ async function toolNavigate(args) {
     } catch {
       fail("tab_closed", "the tab is gone; open a new one with new_tab or use another tabId from list_tabs", "tab was closed during navigation");
     }
-    if (tab.status === "complete") return { url: tab.url };
+    if (tab.status === "complete")
+      return withSnapshot(tabId, undefined, args, { url: tab.url });
     await sleep(250);
   }
   fail(
@@ -926,6 +927,15 @@ async function elementCenter(tabId, sel, sessionId) {
   );
 }
 
+// include_snapshot: las mutaciones cambian el DOM — devuelve el árbol fresco en
+// la misma respuesta. Sus refs reemplazan el store (los previos ya no aplican).
+async function withSnapshot(tabId, sessionId, args, out) {
+  if (args.include_snapshot !== true) return out;
+  const snap = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})({})`, sessionId);
+  refStores.set(tabId, { refs: snap.refs, sessionId });
+  return { ...out, snapshot: snap.snapshot };
+}
+
 async function toolClick(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
@@ -937,7 +947,7 @@ async function toolClick(args) {
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 }, sessionId);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at }, sessionId);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at }, sessionId);
-  return { clicked: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { clicked: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level });
 }
 
 async function toolHover(args) {
@@ -948,7 +958,7 @@ async function toolHover(args) {
   if (!point)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `hover: element not found or not visible: ${sel}`);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, sessionId);
-  return { hovered: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { hovered: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level });
 }
 
 async function toolDrag(args) {
@@ -975,7 +985,7 @@ async function toolDrag(args) {
     await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left" }, sessionId);
   }
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 }, sessionId);
-  return { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, match_level: { from: rf.level, to: rt.level } };
+  return withSnapshot(tabId, sessionId, args, { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, match_level: { from: rf.level, to: rt.level } });
 }
 
 // estrategia type: focus via evaluate + Input.insertText (respeta eventos/input method), Enter como keyDown text="\r" + keyUp
@@ -996,7 +1006,7 @@ async function toolType(args) {
     await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter }, sessionId);
     await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter }, sessionId);
   }
-  return { typed: true, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { typed: true, match_level: level });
 }
 
 // fill: setter nativo del prototipo + input/change con bubbles (React/Vue
@@ -1047,7 +1057,7 @@ async function toolFill(args) {
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `fill: ${reason}`);
     fail("fill_failed", "check the element is editable, take a new snapshot, and retry", `fill: ${reason}`);
   }
-  return { ...out, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { ...out, match_level: level });
 }
 
 // select: match por label antes que por value; el error lista las opciones
@@ -1091,7 +1101,7 @@ async function toolSelect(args) {
       fail("option_not_found", "pick one of the options listed in this error", message);
     fail("select_failed", "take a new snapshot and retry", message);
   }
-  return { ...out, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { ...out, match_level: level });
 }
 
 // --- autofill: form_schema / apply_mapping / list_profile_keys / press_key ---
@@ -1322,7 +1332,8 @@ async function toolApplyMapping(args) {
       failed.push({ ref, reason: e.errorCode || "fill_failed" });
     }
   }
-  return { filled: filledRefs.length, filled_refs: filledRefs, failed, unmapped_keys: [...unmapped] };
+  // los refs escritos pueden haberse desplazado; el snapshot vuelve al main frame
+  return withSnapshot(tabId, undefined, args, { filled: filledRefs.length, filled_refs: filledRefs, failed, unmapped_keys: [...unmapped] });
 }
 
 async function toolListProfileKeys(args) {
@@ -1400,7 +1411,7 @@ async function toolPressKey(args) {
   if (def.text && !isCommand) base.text = def.text;
   await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyDown" });
   await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
-  return { pressed: args.key };
+  return withSnapshot(tabId, undefined, args, { pressed: args.key });
 }
 
 async function toolScroll(args) {
@@ -1414,7 +1425,7 @@ async function toolScroll(args) {
     );
     if (!ok)
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `scroll: element not found: ${sel}`);
-    return { scrolled: true, match_level: level };
+    return withSnapshot(tabId, sessionId, args, { scrolled: true, match_level: level });
   }
   const dx = args.dx ?? 0;
   const dy = args.dy ?? 600;
@@ -1422,7 +1433,7 @@ async function toolScroll(args) {
     tabId,
     `(() => { scrollBy(${JSON.stringify(dx)}, ${JSON.stringify(dy)}); return { x: scrollX, y: scrollY, maxY: document.documentElement.scrollHeight - innerHeight }; })()`
   );
-  return { scrolled: true, x: pos.x, y: pos.y, at_bottom: pos.y >= pos.maxY };
+  return withSnapshot(tabId, undefined, args, { scrolled: true, x: pos.x, y: pos.y, at_bottom: pos.y >= pos.maxY });
 }
 
 // upload: DOM.setFileInputFiles pone los paths directo en el input; Chrome
@@ -1446,7 +1457,7 @@ async function toolUpload(args) {
   if (!node.nodeId)
     fail("element_not_found", "take a new snapshot and retry", `upload: node not found via DOM domain: ${sel}`);
   await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files }, sessionId);
-  return { uploaded: args.files.length, files: args.files, match_level: level };
+  return withSnapshot(tabId, sessionId, args, { uploaded: args.files.length, files: args.files, match_level: level });
 }
 
 async function toolListDialogs(args) {

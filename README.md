@@ -146,6 +146,13 @@ only in files you install — there is no free-form eval tool. See
 
 ## Notes
 
+- Mutating tools (`navigate`, `click`, `hover`, `drag`, `type`, `fill`, `select`,
+  `scroll`, `upload`, `apply_mapping`, `press_key`) accept `include_snapshot:true`
+  to return a fresh snapshot in the same response — its refs replace the
+  previous ones.
+- Payload tools (`snapshot`, `find`, `read_text`, `screenshot`,
+  `get_network_body`) accept `output_path` to write the payload to a file on the
+  bridge machine and return `{path, bytes}` instead of inline content.
 - While the agent acts, Chrome shows the "being debugged" banner. That is
   expected with CDP; the extension auto-detaches after 30s idle.
 - Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 19223; the extension
