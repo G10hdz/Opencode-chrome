@@ -5,7 +5,9 @@ Scope: reading a form into a schema, mapping profile data onto it, and
 filling — with the user keeping the final submit. Bulk autonomous
 application loops (LinkedIn Easy Apply runners etc.) are out of scope.
 
-Status: draft for review.
+Status: implemented (form_schema, apply_mapping, list_profile_keys, press_key).
+Profile editing UI remains out of scope; profiles are seeded under
+`chrome.storage.local.profiles` as `{name: {key: value}}`.
 
 ## Why this feature
 

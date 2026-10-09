@@ -103,6 +103,34 @@ export const TOOLS = [
     schema: { ref, option: z.string(), tabId },
   },
   {
+    name: "form_schema",
+    description:
+      "Enumerate the form fields on the page: ref, kind, label, name, autocomplete token, required, sensitive flag, and options for selects. Hidden honeypot fields are excluded and counted in hidden_count. Returned refs work with fill/select/click. frame scopes to an allowlisted embedded frame like snapshot.",
+    schema: { tabId, frame: z.string().optional() },
+  },
+  {
+    name: "apply_mapping",
+    description:
+      "Fill several fields in one call from a stored autofill profile: mapping is {ref: profileKey}. Profile values are resolved inside the extension from chrome.storage.local and never cross the wire or appear in the result. Missing keys land in unmapped_keys and leave the field untouched; per-field failures land in failed[].",
+    schema: {
+      mapping: z.record(z.string(), z.string()),
+      profile: z.string(),
+      tabId,
+    },
+  },
+  {
+    name: "list_profile_keys",
+    description:
+      "List the key names stored for an autofill profile (chrome.storage.local.profiles.<profile>). Names only — values never leave the extension.",
+    schema: { profile: z.string() },
+  },
+  {
+    name: "press_key",
+    description:
+      "Press a key or modifier combo on the focused element: named keys (Enter, Tab, Escape, Backspace, Delete, arrows, Home, End, PageUp, PageDown, Space) or a single printable character, optionally prefixed with Alt+/Control+/Meta+/Shift+ (e.g. \"Control+A\", \"Shift+Tab\"). For typing text use type/fill.",
+    schema: { key: z.string(), tabId },
+  },
+  {
     name: "scroll",
     description:
       "Scroll the page. With ref, scrolls that element into view; with dx/dy, scrolls the window by that many pixels (default dy 600 down). Returns the new position and at_bottom.",
