@@ -148,6 +148,7 @@ export const TOOLS = [
     name: "list_recipes",
     description:
       "List site adapters installed in ~/.config/opencode-chrome/adapters/ (name, origin, description, declared params). Answered locally by the bridge; no tab needed.",
+    local: true,
     schema: {},
   },
   {
