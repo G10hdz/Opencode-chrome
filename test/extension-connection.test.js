@@ -31,7 +31,7 @@ async function worker() {
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
     runtime: { onMessage: event('message') },
     alarms: { create() {}, onAlarm: event('alarm') },
-    debugger: { onDetach: event('detach') },
+    debugger: { onDetach: event('detach'), onEvent: event('cdpEvent') },
   };
   runInNewContext(source.replace(/^import .*;\n/, ''), {
     ...policy, chrome, WebSocket: Socket,

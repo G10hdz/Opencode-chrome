@@ -16,7 +16,9 @@ const EXPECTED_TOOLS = [
   'close_tab',
   'drag',
   'fill',
+  'get_network_body',
   'hover',
+  'list_network',
   'list_tabs',
   'navigate',
   'new_tab',
@@ -336,6 +338,35 @@ test('upload forwards files list through fake extension', async (t) => {
 test('upload requires a files array', async (t) => {
   const bridge = await startBridge(t);
   const { isError } = outcome(await bridge.callTool('upload', { ref: 6 }));
+  assert.equal(isError, true);
+});
+
+test('list_network and get_network_body roundtrip through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const seen = [];
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    seen.push(msg.tool);
+    if (msg.tool === 'list_network') {
+      reply({ id: msg.id, result: { requests: [{ requestId: 'r1', method: 'GET', url: 'https://api.test/users', status: 200 }] } });
+    } else {
+      assert.equal(msg.args.requestId, 'r1');
+      reply({ id: msg.id, result: { body: '{"ok":true}', base64Encoded: false, truncated: false } });
+    }
+  });
+  t.after(() => ws.close());
+  const list = outcome(await bridge.callTool('list_network'));
+  assert.equal(list.isError, false);
+  assert.match(list.text, /api\.test\/users/);
+  const body = outcome(await bridge.callTool('get_network_body', { requestId: 'r1' }));
+  assert.equal(body.isError, false);
+  const bodyResult = JSON.parse(body.text);
+  assert.equal(bodyResult.body, '{"ok":true}');
+  assert.deepEqual(seen, ['list_network', 'get_network_body']);
+});
+
+test('get_network_body requires a requestId', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError } = outcome(await bridge.callTool('get_network_body', {}));
   assert.equal(isError, true);
 });
 

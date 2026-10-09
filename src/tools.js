@@ -84,6 +84,18 @@ export const TOOLS = [
     schema: { ref, files: z.array(z.string()).min(1), tabId },
   },
   {
+    name: "list_network",
+    description:
+      "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. Optional filter matches substring of url.",
+    schema: { tabId, filter: z.string().optional() },
+  },
+  {
+    name: "get_network_body",
+    description:
+      "Fetch the response body of a requestId seen in list_network. Text bodies over ~200KB are truncated; binary comes back base64Encoded.",
+    schema: { requestId: z.string(), tabId },
+  },
+  {
     name: "screenshot",
     description: "Capture a PNG screenshot of the tab, returned as base64.",
     schema: { tabId },
