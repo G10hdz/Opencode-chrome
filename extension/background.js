@@ -560,6 +560,30 @@ async function toolSnapshot(args) {
   return { snapshot: out.snapshot };
 }
 
+// read-only: scrollea hasta el fondo (hidrata secciones lazy) y devuelve innerText del selector
+async function toolReadText(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const sel = typeof args.selector === "string" && args.selector ? args.selector : "body";
+  const max = typeof args.max === "number" && args.max > 0 ? Math.min(args.max, 200000) : 50000;
+  const scroll = args.scroll === false ? "Promise.resolve()" : `new Promise(async (done) => {
+    const bottom = () => window.scrollTo(0, document.body.scrollHeight);
+    for (let i = 0; i < 12; i++) { bottom(); await new Promise((r) => setTimeout(r, 500)); }
+    window.scrollTo(0, 0);
+    await new Promise((r) => setTimeout(r, 300));
+    done();
+  })`;
+  const res = await cdp(tabId, "Runtime.evaluate", {
+    expression: `(${scroll}).then(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.innerText.slice(0, ${max}) : null; })`,
+    returnByValue: true,
+    awaitPromise: true,
+  });
+  if (res.exceptionDetails) throw new Error(`page script: ${res.exceptionDetails.text}`);
+  if (res.result?.value === null || res.result?.value === undefined)
+    throw new Error(`read_text: no element matches ${sel}`);
+  return { text: res.result.value };
+}
+
 async function elementCenter(tabId, sel) {
   return evaluate(
     tabId,
@@ -841,6 +865,7 @@ const TOOLS = {
   activate_tab: (a) => handleCloseActivate("activate_tab", a),
   navigate: toolNavigate,
   snapshot: toolSnapshot,
+  read_text: toolReadText,
   click: toolClick,
   hover: toolHover,
   drag: toolDrag,

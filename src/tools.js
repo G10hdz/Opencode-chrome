@@ -37,6 +37,12 @@ export const TOOLS = [
     schema: { tabId },
   },
   {
+    name: "read_text",
+    description:
+      "innerText of the element matching the CSS selector (defaults to body). Scrolls to bottom first to hydrate lazy sections; scroll:false skips it. Read-only.",
+    schema: { selector: z.string().optional(), max: z.number().int().optional(), scroll: z.boolean().optional(), tabId },
+  },
+  {
     name: "click",
     description: "Click the element captured with the given ref in the latest snapshot.",
     schema: { ref, tabId },
