@@ -381,6 +381,51 @@ test('extension error propagates to tool result', async (t) => {
   assert.match(text, /tab cerrada/);
 });
 
+test('error envelope: extension error_code and remedy reach the agent', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({
+      id: msg.id,
+      error: {
+        message: 'element changed since the snapshot, take a new one',
+        error_code: 'stale_ref',
+        remedy: 'take a fresh snapshot and use a ref from it',
+      },
+    });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('click', { ref: 9 }));
+  assert.equal(isError, true);
+  const err = JSON.parse(text).error;
+  assert.equal(err.message, 'element changed since the snapshot, take a new one');
+  assert.equal(err.error_code, 'stale_ref');
+  assert.equal(err.remedy, 'take a fresh snapshot and use a ref from it');
+});
+
+test('error envelope: bare extension error gets internal_error fallback', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, error: { message: 'algo explotó' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('screenshot', {}));
+  assert.equal(isError, true);
+  const err = JSON.parse(text).error;
+  assert.equal(err.message, 'algo explotó');
+  assert.equal(err.error_code, 'internal_error');
+  assert.ok(err.remedy.length > 0);
+});
+
+test('error envelope: no extension connected reports extension_disconnected', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError, text } = outcome(await bridge.callTool('list_tabs', {}));
+  assert.equal(isError, true);
+  const err = JSON.parse(text).error;
+  assert.equal(err.error_code, 'extension_disconnected');
+  assert.match(err.remedy, /extension/);
+  assert.match(err.message, /Chrome/);
+});
+
 test('missing extension reply times out', async (t) => {
   const bridge = await startBridge(t);
   const ws = await connectExtension(bridge.port, () => {});
