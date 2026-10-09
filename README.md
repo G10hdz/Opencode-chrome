@@ -74,7 +74,16 @@ can't drive your browser.
 
 **4. Attach a tab:** restart opencode, open the page you want to share, and
 click the extension icon. Its badge shows `on` for attached tabs. Cross-origin
-navigation detaches the tab, so attach it again before continuing.
+navigation detaches the tab by default; for legitimate flows (SSO redirects)
+list the extra origins in `~/.config/opencode-chrome/policy.json`:
+
+```json
+{ "origin_allowlist": { "https://app.example.com": ["https://sso.example.com"] } }
+```
+
+The bridge pushes the allowlist to the extension on connect (env override:
+`OPENCODE_CHROME_POLICY`). Entries apply per attached origin and are not
+symmetric; with no file the policy is strict exact-origin.
 
 ## Tools
 

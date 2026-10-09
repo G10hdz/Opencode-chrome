@@ -18,6 +18,10 @@ const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring 
 const dialogStores = new Map(); // tabId -> { recent: [], pending, policy } de diálogos JS
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
 const ATTACHMENTS = "attachments";
+// orígenes extra por origen de attachment (SSO redirects). La empuja el bridge al conectar
+// ({policy:{origin_allowlist}}); vacío = solo origen exacto. Nace del bridge: la página
+// no puede alcanzarla.
+let originAllowlist = {};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,7 +30,7 @@ async function refreshBadges() {
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
   await Promise.all(
     tabs.map((tab) => {
-      const attached = attachedTab(attachments, tab.id, tab.url);
+      const attached = attachedTab(attachments, tab.id, tab.url, originAllowlist);
       const text = connected ? (attached ? "on" : "") : "off";
       return Promise.all([
         chrome.action.setBadgeText({ tabId: tab.id, text }),
@@ -87,6 +91,12 @@ async function connect() {
     try {
       msg = JSON.parse(ev.data);
     } catch {
+      return;
+    }
+    if (msg && typeof msg.policy === "object" && msg.policy !== null) {
+      const allow = msg.policy.origin_allowlist;
+      originAllowlist = allow && typeof allow === "object" ? allow : {};
+      refreshBadges().catch(() => {}); // un tab en origen allowlisted pasa a "on"
       return;
     }
     if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
@@ -161,16 +171,16 @@ async function resolveTabId(args) {
     if (typeof args.tabId !== "number")
       fail("invalid_argument", "pass a numeric tabId from list_tabs", "tabId must be a number");
     const tab = await chrome.tabs.get(args.tabId).catch(() => null);
-    if (!tab || !attachedTab(attachments, tab.id, tab.url))
+    if (!tab || !attachedTab(attachments, tab.id, tab.url, originAllowlist))
       fail(
         "tab_not_attached",
-        "attach the tab via the extension icon; if it navigated to a different origin, attach it again there",
+        "attach the tab via the extension icon; if a legitimate cross-origin step navigated it (SSO), add the origin to origin_allowlist in ~/.config/opencode-chrome/policy.json",
         "tab is not attached or origin changed"
       );
     return tab.id;
   }
   const tabs = await chrome.tabs.query({});
-  const recent = mostRecentAttached(attachments, tabs);
+  const recent = mostRecentAttached(attachments, tabs, originAllowlist);
   if (!recent)
     fail("no_attached_tab", "focus a tab and click the extension icon to attach it, then retry", "no attached tab");
   return recent.tab.id;
@@ -179,10 +189,10 @@ async function resolveTabId(args) {
 async function assertAttached(tabId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
-  if (!tab || !attachedTab(attachments, tabId, tab.url))
+  if (!tab || !attachedTab(attachments, tabId, tab.url, originAllowlist))
     fail(
       "origin_changed",
-      "the tab navigated to a different origin or was detached; re-attach it via the extension icon and retry",
+      "the tab navigated to a different origin or was detached; re-attach it, or if this is a legitimate cross-origin step (SSO), add the origin to origin_allowlist in ~/.config/opencode-chrome/policy.json",
       "tab is no longer attached or origin changed"
     );
   return tab;
@@ -194,7 +204,7 @@ async function toggleAttachment() {
     if (!tab?.id) fail("no_active_tab", "focus a tab and retry", "no active tab");
     const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
     const key = String(tab.id);
-    if (attachedTab(attachments, tab.id, tab.url)) delete attachments[key];
+    if (attachedTab(attachments, tab.id, tab.url, originAllowlist)) delete attachments[key];
     else {
       const origin = exactOrigin(tab.url);
       if (!origin)
@@ -678,13 +688,13 @@ function REF_CHECK_SCRIPT(sel, fp) {
 async function toolListTabs() {
   const tabs = await chrome.tabs.query({});
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
-  return { tabs: tabs.filter((t) => attachedTab(attachments, t.id, t.url)).map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
+  return { tabs: tabs.filter((t) => attachedTab(attachments, t.id, t.url, originAllowlist)).map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
 }
 
 async function toolBrowserStatus() {
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
   const tabs = await chrome.tabs.query({});
-  return { connected: !!ws && ws.readyState === WebSocket.OPEN, attached: tabs.filter((t) => attachedTab(attachments, t.id, t.url)).map((t) => ({ tabId: t.id, origin: attachments[String(t.id)].origin, attachedAt: attachments[String(t.id)].attachedAt })) };
+  return { connected: !!ws && ws.readyState === WebSocket.OPEN, attached: tabs.filter((t) => attachedTab(attachments, t.id, t.url, originAllowlist)).map((t) => ({ tabId: t.id, origin: attachments[String(t.id)].origin, attachedAt: attachments[String(t.id)].attachedAt })) };
 }
 
 async function toolNewTab(args) {

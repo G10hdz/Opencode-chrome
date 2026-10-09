@@ -7,14 +7,22 @@ export function exactOrigin(url) {
   }
 }
 
-export function attachedTab(attachments, tabId, url) {
+// allowlist: { "https://app.example.com": ["https://sso.example.com"] } — orígenes extra que
+// una attachment del origen key acepta sin re-attach (SSO redirects). La empuja el bridge al
+// conectar desde policy.json; vacía/undefined = solo origen exacto. Direccional: incluir B
+// bajo A no habilita A bajo B.
+export function attachedTab(attachments, tabId, url, allowlist) {
   const entry = attachments?.[String(tabId)];
-  return entry && entry.origin === exactOrigin(url) ? entry : null;
+  if (!entry) return null;
+  const origin = exactOrigin(url);
+  if (entry.origin === origin) return entry;
+  const extra = allowlist?.[entry.origin];
+  return Array.isArray(extra) && extra.includes(origin) ? entry : null;
 }
 
-export function mostRecentAttached(attachments, tabs) {
+export function mostRecentAttached(attachments, tabs, allowlist) {
   return tabs
-    .map((tab) => ({ tab, entry: attachedTab(attachments, tab.id, tab.url) }))
+    .map((tab) => ({ tab, entry: attachedTab(attachments, tab.id, tab.url, allowlist) }))
     .filter(({ entry }) => entry)
     .sort((a, b) => b.entry.attachedAt - a.entry.attachedAt)[0] || null;
 }
