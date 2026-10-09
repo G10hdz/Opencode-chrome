@@ -11,13 +11,20 @@ export function exactOrigin(url) {
 // una attachment del origen key acepta sin re-attach (SSO redirects). La empuja el bridge al
 // conectar desde policy.json; vacía/undefined = solo origen exacto. Direccional: incluir B
 // bajo A no habilita A bajo B.
+// true si url cae en el origen de la attachment o en su allowlist. También gatea el
+// acceso a frames OOPIF: un iframe embebido es la misma frontera de confianza que un
+// redirect SSO.
+export function originAllowed(entryOrigin, url, allowlist) {
+  const origin = exactOrigin(url);
+  if (!origin) return false;
+  if (entryOrigin === origin) return true;
+  const extra = allowlist?.[entryOrigin];
+  return Array.isArray(extra) && extra.includes(origin);
+}
+
 export function attachedTab(attachments, tabId, url, allowlist) {
   const entry = attachments?.[String(tabId)];
-  if (!entry) return null;
-  const origin = exactOrigin(url);
-  if (entry.origin === origin) return entry;
-  const extra = allowlist?.[entry.origin];
-  return Array.isArray(extra) && extra.includes(origin) ? entry : null;
+  return entry && originAllowed(entry.origin, url, allowlist) ? entry : null;
 }
 
 export function mostRecentAttached(attachments, tabs, allowlist) {

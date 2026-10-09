@@ -33,13 +33,14 @@ export const TOOLS = [
   {
     name: "snapshot",
     description:
-      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000). Sensitive fields (passwords, card and identity numbers) appear redacted with a sensitive=<reason> marker and reject agent input with human_takeover_required.",
+      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000), frame scopes to an embedded out-of-process iframe (frameId or url substring from list_frames; its origin must be allowlisted). Sensitive fields (passwords, card and identity numbers) appear redacted with a sensitive=<reason> marker and reject agent input with human_takeover_required.",
     schema: {
       tabId,
       selector: z.string().optional(),
       interactive_only: z.boolean().optional(),
       in_viewport_only: z.boolean().optional(),
       max_chars: z.number().int().positive().optional(),
+      frame: z.string().optional(),
     },
   },
   {
@@ -50,6 +51,7 @@ export const TOOLS = [
       text: z.string().optional(),
       role: z.string().optional(),
       selector: z.string().optional(),
+      frame: z.string().optional(),
       tabId,
     },
   },
@@ -57,7 +59,13 @@ export const TOOLS = [
     name: "read_text",
     description:
       "innerText of the element matching the CSS selector (defaults to body). Scrolls to bottom first to hydrate lazy sections; scroll:false skips it. Read-only.",
-    schema: { selector: z.string().optional(), max: z.number().int().optional(), scroll: z.boolean().optional(), tabId },
+    schema: { selector: z.string().optional(), max: z.number().int().optional(), scroll: z.boolean().optional(), frame: z.string().optional(), tabId },
+  },
+  {
+    name: "list_frames",
+    description:
+      "List the tab's frame tree: frameId, url, parent, oopif flag, sessionId and whether the frame's origin is allowed by the tab's origin allowlist. An out-of-process iframe is only reachable when its origin is allowlisted for the attached origin (same rule as an SSO redirect — see ~/.config/opencode-chrome/policy.json). Pass its frameId or a unique url substring as `frame` to snapshot/find/read_text.",
+    schema: { tabId },
   },
   {
     name: "click",

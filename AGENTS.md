@@ -71,6 +71,11 @@ is JSON-stringified into text.
   `~/.config/opencode-chrome/policy.json` (SSO redirects). The allowlist lives
   bridge-side only; the page can never reach it. Do not bypass this resolver
   with direct tab or debugger access.
+- OOPIFs (out-of-process iframes) attach as child debugger sessions via
+  `Target.setAutoAttach{flatten:true}`; `resolveFrameSession` only returns a
+  session whose frame origin passes `originAllowed` for the tab's attached
+  origin (same trust boundary as an SSO redirect). Never send commands to a
+  frame session without that check.
 - The debugger auto-detaches after idle; navigation invalidates cached refs.
 - Sensitive fields (password, `autocomplete=cc-*`, CVV/SSN-labeled inputs) are
   redacted in snapshots and any action on their ref fails with

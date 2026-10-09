@@ -24,6 +24,7 @@ const EXPECTED_TOOLS = [
   'handle_dialog',
   'hover',
   'list_dialogs',
+  'list_frames',
   'list_network',
   'list_tabs',
   'navigate',
@@ -699,6 +700,26 @@ test('bridge pushes the origin allowlist to the extension on connect', async (t)
   assert.deepEqual(policy, {
     origin_allowlist: { 'https://app.example.com': ['https://sso.example.com'] },
   });
+});
+
+test('list_frames and frame-scoped snapshot roundtrip through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    if (msg.tool === 'list_frames') {
+      reply({
+        id: msg.id,
+        result: { frames: [{ frameId: 'f1', url: 'https://pay.example.com/e', oopif: true, sessionId: 's1', allowed: true }] },
+      });
+    } else if (msg.tool === 'snapshot') {
+      assert.equal(msg.args.frame, 'pay.example.com');
+      reply({ id: msg.id, result: { snapshot: 'frame-tree' } });
+    }
+  });
+  t.after(() => ws.close());
+  const out = await bridge.callTool('list_frames', {});
+  assert.match(outcome(out).text, /pay\.example\.com/);
+  const snap = await bridge.callTool('snapshot', { frame: 'pay.example.com' });
+  assert.match(outcome(snap).text, /frame-tree/);
 });
 
 test('bridge sends an empty allowlist when no policy file exists', async (t) => {
