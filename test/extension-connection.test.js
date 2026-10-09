@@ -42,7 +42,7 @@ async function worker(localStore = { token: 'test-token' }) {
     },
     tabs: { query: async () => [], onRemoved: event('removed'), onUpdated: event('updated') },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
-    runtime: { onMessage: event('message'), onInstalled: event('installed'), onStartup: event('startup') },
+    runtime: { onMessage: event('message'), onInstalled: event('installed'), onStartup: event('startup'), getManifest: () => ({ version: '0.0.0-test' }) },
     alarms: { create() {}, onAlarm: event('alarm') },
     debugger: {
       onDetach: event('detach'), onEvent: event('cdpEvent'),
@@ -847,6 +847,56 @@ test('list_network filters by resource type, paginates and redacts headers', asy
   assert.equal(api.requestHeaders.Authorization, '[redacted]');
   assert.equal(api.responseHeaders['Set-Cookie'], '[redacted]');
   assert.equal(api.responseHeaders['Content-Type'], 'application/json');
+});
+
+test('list_network exports HAR over the filtered set', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const flush = async () => { for (let i = 0; i < 4; i++) await setImmediate(); };
+
+  w.sockets[0].receive({ id: 1, tool: 'list_network', args: { tabId: 7 } }); // attacha
+  await flush();
+  const fire = (method, params) => w.listeners.cdpEvent({ tabId: 7 }, method, params);
+  fire('Network.requestWillBeSent', { requestId: 'r1', type: 'XHR', request: { method: 'GET', url: 'https://app.example.com/api', headers: { Authorization: 'Bearer t' } }, timestamp: 10, wallTime: 1750000000 });
+  fire('Network.responseReceived', { requestId: 'r1', response: { status: 200, mimeType: 'application/json', headers: { 'Set-Cookie': 's=1' } }, timestamp: 10.2 });
+  fire('Network.loadingFinished', { requestId: 'r1', encodedDataLength: 128, timestamp: 10.3 });
+  fire('Network.requestWillBeSent', { requestId: 'r2', type: 'Document', request: { method: 'GET', url: 'https://app.example.com/', headers: {} }, timestamp: 11 });
+
+  w.sockets[0].receive({ id: 2, tool: 'list_network', args: { tabId: 7, format: 'har', filter: '/api' } });
+  await flush();
+  const { har, entries } = w.sockets[0].sent[1].result;
+  assert.equal(entries, 1);
+  const doc = JSON.parse(har);
+  assert.equal(doc.log.version, '1.2');
+  const e = doc.log.entries[0];
+  assert.equal(e.request.url, 'https://app.example.com/api');
+  assert.equal(e.startedDateTime, new Date(1750000000 * 1000).toISOString());
+  assert.equal(e.time, 300);
+  assert.equal(e.response.status, 200);
+  assert.equal(e.request.headers.find((h) => h.name === 'Authorization').value, '[redacted]');
+  assert.equal(e.response.headers.find((h) => h.name === 'Set-Cookie').value, '[redacted]');
+});
+
+test('list_storage_keys returns key names, never values', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  // la evaluate mockeada devuelve lo que el script in-page retornaría
+  w.ctx.evaluate = async () => ({ local_storage: ['session_id', 'theme'], session_storage: null });
+  w.sockets[0].receive({ id: 1, tool: 'list_storage_keys', args: { tabId: 7 } });
+  await setImmediate();
+  await setImmediate();
+  await setImmediate();
+  const res = w.sockets[0].sent[0].result;
+  assert.equal(res.local_storage.join('|'), 'session_id|theme');
+  assert.equal(res.session_storage, null);
 });
 
 test('wait_for accepts an array of alternative texts', async () => {

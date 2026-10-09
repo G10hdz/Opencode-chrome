@@ -137,7 +137,8 @@ only in files you install — there is no free-form eval tool. See
 | `list_profile_keys(profile)` / `apply_mapping({ref: key}, profile)` | fill a whole form from `chrome.storage.local.profiles.<profile>`; values never cross the wire, missing keys land in `unmapped_keys` |
 | `scroll(ref? or dx/dy)` | scroll element into view or page by deltas |
 | `upload(ref, paths)` | set files on a file input via CDP |
-| `list_network` / `get_network_body(id)` | captured requests and response bodies; `filter`, `resource_types`, `offset`/`limit` scope it, `include_headers` adds redacted headers |
+| `list_network` / `get_network_body(id)` | captured requests and response bodies; `filter`, `resource_types`, `offset`/`limit` scope it, `include_headers` adds redacted headers, `format:'har'` or `output_path` exports HAR 1.2 |
+| `list_storage_keys` | localStorage/sessionStorage key names only (values never leave the tab) |
 | `list_console_messages` | console calls, uncaught exceptions and browser log entries; `types`/`filter` scope it |
 | `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |

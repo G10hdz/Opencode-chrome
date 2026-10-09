@@ -1,4 +1,8 @@
 import { test, expect } from './fixtures.mjs';
+import { getSw } from './lib/harness.mjs';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('list_network sees a real fetch and get_network_body returns it', async ({ env, attached }) => {
   const found = await env.mcp.call('find', { text: 'call api', tabId: attached.tabId });
@@ -39,4 +43,40 @@ test('list_network filters resource types, paginates and redacts headers', async
   expect(api.requestHeaders).toBeTruthy();
   for (const [k, v] of Object.entries(api.requestHeaders))
     if (['cookie', 'authorization'].includes(k.toLowerCase())) expect(v).toBe('[redacted]');
+});
+
+test('list_network exports the filtered set as a HAR file', async ({ env, attached }) => {
+  const found = await env.mcp.call('find', { text: 'call api', tabId: attached.tabId });
+  const ref = Number(/\[ref=(\d+)\]/.exec(JSON.stringify(found))?.[1]);
+  await env.mcp.call('click', { ref, tabId: attached.tabId });
+  await env.mcp.call('wait_for', { text: 'e2e-api-body', timeout: 5000, tabId: attached.tabId });
+
+  const out = join(tmpdir(), `e2e-net-${process.pid}.har`);
+  try {
+    const res = await env.mcp.call('list_network', { tabId: attached.tabId, filter: '/api', output_path: out });
+    expect(res.path).toBe(out);
+    expect(res.bytes).toBeGreaterThan(0);
+    const doc = JSON.parse(readFileSync(out, 'utf8'));
+    expect(doc.log.version).toBe('1.2');
+    const urls = doc.log.entries.map((e) => e.request.url);
+    expect(urls.some((u) => u.includes('/api'))).toBe(true);
+    expect(urls.every((u) => u.includes('/api'))).toBe(true); // filter aplica al export
+  } finally {
+    rmSync(out, { force: true });
+  }
+});
+
+test('list_storage_keys returns key names without values', async ({ env, attached }) => {
+  await env.mcp.call('snapshot', { tabId: attached.tabId }); // attacha el debugger
+  const sw = await getSw(env);
+  await sw.evaluate(`new Promise((r) => chrome.debugger.sendCommand(
+    { tabId: ${attached.tabId} },
+    'Runtime.evaluate',
+    { expression: 'localStorage.setItem("e2e_token","SECRET");localStorage.setItem("e2e_pref","x")', returnByValue: true },
+    () => r(true)
+  ))`);
+  const res = await env.mcp.call('list_storage_keys', { tabId: attached.tabId });
+  expect(res.local_storage).toContain('e2e_token');
+  expect(res.local_storage).toContain('e2e_pref');
+  expect(JSON.stringify(res)).not.toContain('SECRET');
 });
