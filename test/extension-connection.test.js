@@ -33,14 +33,15 @@ async function worker() {
     alarms: { create() {}, onAlarm: event('alarm') },
     debugger: { onDetach: event('detach'), onEvent: event('cdpEvent') },
   };
-  runInNewContext(source.replace(/^import .*;\n/, ''), {
+  const ctx = {
     ...policy, chrome, WebSocket: Socket,
     setTimeout(fn, ms) { timers.set(++nextTimer, { fn, ms }); return nextTimer; },
     clearTimeout(id) { timers.delete(id); },
-  });
+  };
+  runInNewContext(source.replace(/^import .*;\n/, ''), ctx);
   await setImmediate();
   return {
-    sockets, chrome, listeners, timers,
+    sockets, chrome, listeners, timers, ctx,
     async fire(ms) {
       for (const [id, timer] of [...timers]) {
         if (timer.ms !== ms || !timers.has(id)) continue;
@@ -103,6 +104,86 @@ test('a connection stuck opening gets a fresh attempt', async () => {
   await w.fire(10000);
   assert.equal(w.sockets[0].readyState, 3);
   assert.equal(w.sockets.length, 2);
+});
+
+// DOM mínimo para correr REF_CHECK_SCRIPT de verdad: querySelector por selector exacto,
+// querySelectorAll sirve la lista de interactivos o lookups de #id (los usa selectorFor).
+const INTERACTIVE_SEL = "a,button,input,select,textarea,[role],[onclick],[tabindex],summary";
+function fakeEl(over) {
+  return {
+    nodeType: 1, tagName: 'BUTTON', id: '', className: '', type: undefined,
+    labels: null, innerText: '', parentElement: null, childNodes: [],
+    matches: () => true,
+    getAttribute: () => null, getClientRects: () => [{}],
+    ...over,
+  };
+}
+function fakeDom(els, bySel) {
+  const document = {
+    documentElement: { nodeType: 1 },
+    querySelector: (s) => bySel[s] ?? null,
+    querySelectorAll: (s) => {
+      if (s === INTERACTIVE_SEL) return els;
+      if (s.startsWith('#')) return els.filter((e) => e.id === s.slice(1));
+      return [];
+    },
+  };
+  return {
+    document,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    CSS: { escape: (s) => s },
+  };
+}
+const hashStr = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return h; };
+
+test('ref fingerprint tiers: exact, reidentified, stable, gone', async () => {
+  const w = await worker();
+  const scriptFor = (sel, fp) => w.ctx.REF_CHECK_SCRIPT(sel, fp);
+  const run = (src, els, bySel) => runInNewContext(src, fakeDom(els, bySel));
+
+  const fp = { t: 'button', n: 'Save', r: 'button', c: hashStr('primary') };
+  // los objetos vienen de otro realm de vm: se comparan campos, no deepEqual estructural
+  const pick = (o) => ({ found: o.found, level: o.level, sel: o.sel });
+
+  // exact: el selector resuelve y tag+name intactos
+  const same = fakeEl({ id: 'save', className: 'primary', innerText: 'Save' });
+  let out = pick(run(scriptFor('#save', fp), [same], { '#save': same }));
+  assert.deepEqual(out, { found: true, level: 'exact', sel: '#save' });
+
+  // reidentified: el selector viejo murió pero tag+name es único entre interactivos
+  const moved = fakeEl({ id: 'save2', className: 'primary', innerText: 'Save' });
+  const noise = fakeEl({ id: 'other', innerText: 'Cancel' });
+  out = pick(run(scriptFor('#save', fp), [moved, noise], {}));
+  assert.deepEqual(out, { found: true, level: 'reidentified', sel: '#save2' });
+
+  // stable: el selector resuelve pero el nombre driftó y no hay candidato con el nombre viejo
+  const renamed = fakeEl({ id: 'save', className: 'primary', innerText: 'Guardar' });
+  out = pick(run(scriptFor('#save', fp), [renamed], { '#save': renamed }));
+  assert.deepEqual(out, { found: true, level: 'stable', sel: '#save' });
+
+  // gone: ni selector ni reidentificación
+  out = pick(run(scriptFor('#save', fp), [noise], {}));
+  assert.deepEqual(out, { found: false, level: undefined, sel: undefined });
+});
+
+test('snapshot script assigns object fingerprints to refs', async () => {
+  const w = await worker();
+  const out = runInNewContext(`(${w.ctx.SNAPSHOT_SCRIPT})({})`, {
+    document: {
+      title: 't',
+      documentElement: { nodeType: 1 },
+      querySelectorAll: () => [fakeEl({ innerText: 'Go' })],
+      querySelector: () => null,
+    },
+    location: { href: 'http://x/' },
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    CSS: { escape: (s) => s },
+  });
+  const ref = out.refs['1'];
+  assert.equal(ref.fp.t, 'button');
+  assert.equal(ref.fp.n, 'Go');
+  assert.equal(ref.fp.r, 'button');
+  assert.equal(ref.fp.c, hashStr(''));
 });
 
 test('events from a retired socket do not close the current connection', async () => {
