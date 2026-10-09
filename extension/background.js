@@ -812,7 +812,7 @@ async function toolBrowserStatus() {
 }
 
 async function toolNewTab(args) {
-  const tab = await chrome.tabs.create({ url: args.url || "about:blank", active: true });
+  const tab = await chrome.tabs.create({ url: args.url || "about:blank", active: args.background !== true });
   return { id: tab.id };
 }
 
@@ -826,22 +826,14 @@ async function handleCloseActivate(tool, args) {
   return {};
 }
 
-async function toolNavigate(args) {
-  requireArg(args, "url");
-  const tabId = await resolveTabId(args);
-  await assertAttached(tabId);
-  await chrome.tabs.update(tabId, { url: args.url });
+async function waitForLoad(tabId) {
   await sleep(200); // margen para que status pase a loading antes del primer chequeo
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    let tab;
-    try {
-      tab = await chrome.tabs.get(tabId);
-    } catch {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab)
       fail("tab_closed", "the tab is gone; open a new one with new_tab or use another tabId from list_tabs", "tab was closed during navigation");
-    }
-    if (tab.status === "complete")
-      return withSnapshot(tabId, undefined, args, { url: tab.url });
+    if (tab.status === "complete") return tab;
     await sleep(250);
   }
   fail(
@@ -849,6 +841,47 @@ async function toolNavigate(args) {
     "the page may still be loading; retry, or poll for content with wait_for",
     "navigate: timed out waiting for load (30s)"
   );
+}
+
+async function toolNavigate(args) {
+  const tabId = await resolveTabId(args);
+  await assertAttached(tabId);
+  const action = args.action;
+  if (action !== undefined && !["back", "forward", "reload"].includes(action))
+    fail("invalid_argument", "action: back, forward or reload", `navigate: bad action ${JSON.stringify(action)}`);
+  if ((action ? 1 : 0) + (typeof args.url === "string" && args.url ? 1 : 0) !== 1)
+    fail("invalid_argument", "pass exactly one of url or action", "navigate: needs url or action");
+  // ignore_cache deshabilita el HTTP cache durante la navegación y se restaura
+  // después (Page.reload también toma ignoreCache propio)
+  const bypass = args.ignore_cache === true;
+  // chrome.tabs.update no necesita el debugger; las acciones CDP y el
+  // include_snapshot post-nav sí
+  if (action || bypass || args.include_snapshot === true) await ensureAttached(tabId);
+  try {
+    if (bypass) await cdp(tabId, "Network.setCacheDisabled", { cacheDisabled: true });
+    if (action === "reload") {
+      await cdp(tabId, "Page.reload", { ignoreCache: true });
+    } else if (action) {
+      const hist = await cdp(tabId, "Page.getNavigationHistory");
+      const entry = hist.entries?.[hist.currentIndex + (action === "back" ? -1 : 1)];
+      if (!entry)
+        fail("no_history", `the tab has no ${action} history entry`, `navigate: no ${action} entry in history`);
+      await cdp(tabId, "Page.navigateToHistoryEntry", { entryId: entry.id });
+    } else {
+      await chrome.tabs.update(tabId, { url: args.url });
+    }
+    const tab = await waitForLoad(tabId);
+    // post-nav la onUpdated pudo detacher por origen: entonces no hay snapshot
+    let out = { url: tab.url };
+    if (args.include_snapshot === true) {
+      out = await withSnapshot(tabId, undefined, args, out)
+        .catch(() => ({ ...out, detached_after_nav: true }));
+    }
+    return out;
+  } finally {
+    if (bypass)
+      await cdp(tabId, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
+  }
 }
 
 // frame = targetId de list_frames o substring único de url. Un OOPIF es otra frontera de
@@ -1642,13 +1675,18 @@ async function toolScreenshot(args) {
 
 async function toolWaitFor(args) {
   requireArg(args, "text");
+  const texts = Array.isArray(args.text) ? args.text : [args.text];
+  if (!texts.length || texts.some((t) => typeof t !== "string" || !t))
+    fail("invalid_argument", "pass a non-empty string or array of strings", "wait_for: empty text");
   const timeout = typeof args.timeout === "number" ? args.timeout : 10000;
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
-  const expr = `(() => { try { return document.body && document.body.innerText.includes(${JSON.stringify(args.text)}); } catch { return false; } })()`;
+  // array = alternativas: resuelve con el primero que aparezca
+  const expr = `(() => { try { const t = (document.body && document.body.innerText) || ''; for (const s of ${JSON.stringify(texts)}) if (t.includes(s)) return s; return null; } catch { return null; } })()`;
+  let matched = null;
   const found = await pollWhileAttached({
     assertAttached: () => assertAttached(tabId),
-    check: () => evaluate(tabId, expr),
+    check: async () => (matched = await evaluate(tabId, expr)) != null,
     pause: sleep,
     timeout,
   });
@@ -1656,9 +1694,29 @@ async function toolWaitFor(args) {
     fail(
       "wait_timeout",
       "increase timeout, or check the text appears exactly as rendered in the page",
-      `wait_for: "${args.text}" no apareció en ${timeout}ms`
+      `wait_for: ${texts.map((t) => JSON.stringify(t)).join(", ")} no apareció en ${timeout}ms`
     );
-  return { found: true };
+  return { found: true, matched };
+}
+
+// Emulation.setDeviceMetricsOverride persiste mientras el debugger esté attachado;
+// clear:true lo quita (Emulation.clearDeviceMetricsOverride)
+async function toolResizePage(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  if (args.clear === true) {
+    await cdp(tabId, "Emulation.clearDeviceMetricsOverride", {});
+    return { cleared: true };
+  }
+  requireArg(args, "width");
+  requireArg(args, "height");
+  await cdp(tabId, "Emulation.setDeviceMetricsOverride", {
+    width: args.width,
+    height: args.height,
+    deviceScaleFactor: 0,
+    mobile: false,
+  });
+  return { width: args.width, height: args.height };
 }
 
 // Los items de chrome.downloads no llevan tabId: el tab solo actúa de gate de
@@ -1825,6 +1883,7 @@ const TOOLS = {
   list_console_messages: toolListConsoleMessages,
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,
+  resize_page: toolResizePage,
   wait_for: toolWaitFor,
   wait_download: toolWaitDownload,
   run_recipe: toolRunRecipe,

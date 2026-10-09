@@ -47,8 +47,9 @@ async function worker(localStore = { token: 'test-token' }) {
     debugger: {
       onDetach: event('detach'), onEvent: event('cdpEvent'),
       sentCommands: [],
+      responses: {}, // method -> result que sendCommand devuelve por callback
       attach: (t, v, cb) => cb?.(),
-      sendCommand: (t, m, p, cb) => { chrome.debugger.sentCommands.push({ target: t, method: m, params: p }); cb?.({}); },
+      sendCommand: (t, m, p, cb) => { chrome.debugger.sentCommands.push({ target: t, method: m, params: p }); cb?.(chrome.debugger.responses[m] ?? {}); },
       detach: (t, cb) => cb?.(),
     },
     downloads: { search: async () => [] },
@@ -730,4 +731,114 @@ test('list_console_messages collects console, exception and log events with filt
   await setImmediate();
   await setImmediate();
   assert.equal(w.sockets[0].sent[3].result.messages.length, 1);
+});
+
+test('navigate action drives history and reload via CDP', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/two', status: 'complete' });
+  w.chrome.debugger.responses['Page.getNavigationHistory'] = {
+    currentIndex: 1,
+    entries: [
+      { id: 10, url: 'https://app.example.com/one' },
+      { id: 11, url: 'https://app.example.com/two' },
+    ],
+  };
+  const flush = async () => { for (let i = 0; i < 4; i++) await setImmediate(); };
+
+  w.sockets[0].receive({ id: 1, tool: 'navigate', args: { tabId: 7, action: 'back' } });
+  await flush();
+  await w.fire(200); // el sleep inicial de waitForLoad
+  await flush();
+  const hist = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.navigateToHistoryEntry');
+  assert.equal(hist.params.entryId, 10);
+  assert.equal(w.sockets[0].sent[0].result.url, 'https://app.example.com/two');
+
+  // reload + ignore_cache: Page.reload con ignoreCache y cache wrapper restaurado
+  w.sockets[0].receive({ id: 2, tool: 'navigate', args: { tabId: 7, action: 'reload', ignore_cache: true } });
+  await flush();
+  await w.fire(200);
+  await flush();
+  const reload = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.reload');
+  assert.equal(reload.params.ignoreCache, true);
+  const cache = w.chrome.debugger.sentCommands.filter((c) => c.method === 'Network.setCacheDisabled');
+  assert.deepEqual(cache.map((c) => c.params.cacheDisabled).join('|'), 'true|false');
+
+  // validaciones: url+action juntos, action desconocida, sin historial
+  w.sockets[0].receive({ id: 3, tool: 'navigate', args: { tabId: 7, url: 'https://x/', action: 'back' } });
+  await flush();
+  assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
+  w.sockets[0].receive({ id: 4, tool: 'navigate', args: { tabId: 7, action: 'sideways' } });
+  await flush();
+  assert.equal(w.sockets[0].sent[3].error.error_code, 'invalid_argument');
+  w.chrome.debugger.responses['Page.getNavigationHistory'] = { currentIndex: 0, entries: [{ id: 10 }] };
+  w.sockets[0].receive({ id: 5, tool: 'navigate', args: { tabId: 7, action: 'back' } });
+  await flush();
+  assert.equal(w.sockets[0].sent[4].error.error_code, 'no_history');
+});
+
+test('wait_for accepts an array of alternative texts', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.ctx.evaluate = async () => 'Listo'; // el innerText matchea la segunda alternativa
+  w.sockets[0].receive({ id: 1, tool: 'wait_for', args: { tabId: 7, text: ['Error', 'Listo'], timeout: 5000 } });
+  await setImmediate();
+  await setImmediate();
+  const res = w.sockets[0].sent[0].result;
+  assert.equal(res.found, true);
+  assert.equal(res.matched, 'Listo');
+  // string simple sigue devolviendo matched
+  w.sockets[0].receive({ id: 2, tool: 'wait_for', args: { tabId: 7, text: 'Listo', timeout: 5000 } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[1].result.matched, 'Listo');
+  // array vacío -> invalid_argument
+  w.sockets[0].receive({ id: 3, tool: 'wait_for', args: { tabId: 7, text: [], timeout: 5000 } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
+});
+
+test('new_tab background keeps the current tab focused', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  const created = [];
+  w.chrome.tabs.create = async (o) => { created.push(o); return { id: 9, ...o }; };
+  w.sockets[0].receive({ id: 1, tool: 'new_tab', args: { url: 'https://x/', background: true } });
+  w.sockets[0].receive({ id: 2, tool: 'new_tab', args: { url: 'https://y/' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(created[0].active, false);
+  assert.equal(created[1].active, true);
+});
+
+test('resize_page sets and clears device metrics override', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.sockets[0].receive({ id: 1, tool: 'resize_page', args: { tabId: 7, width: 390, height: 844 } });
+  await setImmediate();
+  await setImmediate();
+  const set = w.chrome.debugger.sentCommands.find((c) => c.method === 'Emulation.setDeviceMetricsOverride');
+  assert.equal(set.params.width, 390);
+  assert.equal(set.params.height, 844);
+  w.sockets[0].receive({ id: 2, tool: 'resize_page', args: { tabId: 7, clear: true } });
+  await setImmediate();
+  await setImmediate();
+  assert.ok(w.chrome.debugger.sentCommands.some((c) => c.method === 'Emulation.clearDeviceMetricsOverride'));
+  // sin width/height ni clear -> missing_argument
+  w.sockets[0].receive({ id: 3, tool: 'resize_page', args: { tabId: 7 } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[2].error.error_code, 'missing_argument');
 });

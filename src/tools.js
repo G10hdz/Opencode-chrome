@@ -18,8 +18,8 @@ export const TOOLS = [
   },
   {
     name: "new_tab",
-    description: "Open a new active tab, optionally at a URL.",
-    schema: { url: z.string().optional() },
+    description: "Open a new tab, optionally at a URL. background:true opens it without focusing.",
+    schema: { url: z.string().optional(), background: z.boolean().optional() },
   },
   {
     name: "close_tab",
@@ -33,8 +33,15 @@ export const TOOLS = [
   },
   {
     name: "navigate",
-    description: "Navigate to a URL in the tab and wait for the load to finish. include_snapshot:true returns a fresh snapshot in the same response.",
-    schema: { url: z.string(), tabId, include_snapshot: includeSnapshot },
+    description:
+      "Navigate the tab and wait for the load to finish. Pass exactly one of: url (go to URL), or action back/forward/reload (history navigation via Page.navigateToHistoryEntry / Page.reload). ignore_cache:true bypasses the HTTP cache during the navigation. If the landing origin is outside the attachment's reach the tab detaches (origin_changed on the next call) and include_snapshot yields detached_after_nav instead of a tree. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: {
+      url: z.string().optional(),
+      action: z.enum(["back", "forward", "reload"]).optional(),
+      ignore_cache: z.boolean().optional(),
+      tabId,
+      include_snapshot: includeSnapshot,
+    },
   },
   {
     name: "snapshot",
@@ -207,10 +214,16 @@ export const TOOLS = [
     schema: { timeout_ms: z.number().int().positive().optional(), tabId },
   },
   {
+    name: "resize_page",
+    description:
+      "Resize the page viewport via Emulation.setDeviceMetricsOverride (width/height in CSS px). The override persists while the debugger stays attached; clear:true removes it.",
+    schema: { tabId, width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), clear: z.boolean().optional() },
+  },
+  {
     name: "wait_for",
     description:
-      "Poll the page innerText until the given text appears or timeout (ms) elapses.",
-    schema: { text: z.string(), timeout: z.number().int().optional(), tabId },
+      "Poll the page innerText until text appears or timeout (ms) elapses. text accepts a string or an array — an array resolves with the first alternative found (matched in the result).",
+    schema: { text: z.union([z.string(), z.array(z.string()).min(1)]), timeout: z.number().int().optional(), tabId },
   },
 ];
 

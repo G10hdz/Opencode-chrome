@@ -120,9 +120,9 @@ only in files you install — there is no free-form eval tool. See
 |---|---|
 | `browser_status` | bridge connection and attached tabs |
 | `list_tabs` | attached tabs with id, title, url |
-| `new_tab(url?)` | open a tab (active) |
+| `new_tab(url?, background?)` | open a tab (active unless `background:true`) |
 | `close_tab(id)` / `activate_tab(id)` | tab management |
-| `navigate(url, tabId?)` | navigate and wait for load |
+| `navigate(url?, action?, ignore_cache?, tabId?)` | go to a URL or `action` back/forward/reload; waits for load |
 | `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element; `selector`, `interactive_only`, `in_viewport_only`, `max_chars`, `frame` scope it; sensitive fields are redacted |
 | `find(text?, role?, selector?, frame?)` | matching `[ref]` lines only |
 | `read_text(selector?, max?, scroll?, frame?)` | element innerText, hydrates lazy sections |
@@ -141,7 +141,8 @@ only in files you install — there is no free-form eval tool. See
 | `list_console_messages` | console calls, uncaught exceptions and browser log entries; `types`/`filter` scope it |
 | `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |
-| `wait_for(text, timeout?)` | poll page text until it appears |
+| `resize_page(width, height, clear?, tabId?)` | viewport override via CDP; persists while attached |
+| `wait_for(text|text[], timeout?)` | poll page text until it appears; an array resolves on the first match |
 | `wait_download(timeout_ms?)` | wait for a download; returns saved path, bytes, mime and sha256 |
 | `list_recipes` / `run_recipe(name, params?)` | site adapters from `~/.config/opencode-chrome/adapters/` |
 

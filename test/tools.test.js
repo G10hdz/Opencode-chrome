@@ -37,6 +37,7 @@ const EXPECTED_TOOLS = [
   'new_tab',
   'press_key',
   'read_text',
+  'resize_page',
   'run_recipe',
   'screenshot',
   'scroll',
