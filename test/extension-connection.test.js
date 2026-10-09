@@ -115,6 +115,7 @@ function fakeEl(over) {
     labels: null, innerText: '', parentElement: null, childNodes: [],
     matches: () => true,
     getAttribute: () => null, getClientRects: () => [{}],
+    getBoundingClientRect: () => ({ top: 0, left: 0, right: 10, bottom: 10 }),
     ...over,
   };
 }
@@ -196,10 +197,27 @@ function runSnapshot(ctx, els, opts = {}) {
       querySelector: () => null,
     },
     location: { href: 'http://x/' },
+    innerWidth: 1200, innerHeight: 800,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
     CSS: { escape: (s) => s },
   });
 }
+
+test('in_viewport_only drops elements outside the viewport', async () => {
+  const w = await worker();
+  const onscreen = fakeEl({ innerText: 'Top' });
+  const belowFold = fakeEl({
+    innerText: 'Deep',
+    getBoundingClientRect: () => ({ top: 5000, left: 0, right: 10, bottom: 5040 }),
+  });
+  const full = runSnapshot(w.ctx, [onscreen, belowFold]);
+  assert.match(full.snapshot, /"Top"/);
+  assert.match(full.snapshot, /"Deep"/);
+  const pruned = runSnapshot(w.ctx, [onscreen, belowFold], { inViewportOnly: true });
+  assert.match(pruned.snapshot, /"Top"/);
+  assert.doesNotMatch(pruned.snapshot, /"Deep"/);
+  assert.equal(Object.keys(pruned.refs).length, 1);
+});
 
 test('snapshot serializes compound controls inline', async () => {
   const w = await worker();
