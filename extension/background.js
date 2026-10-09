@@ -429,6 +429,11 @@ function SNAPSHOT_SCRIPT(opts) {
     return el.getClientRects().length > 0;
   };
 
+  const inViewport = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+  };
+
   // texto propio = solo nodos de texto directos, evita duplicar li>p
   const ownText = (el) => {
     let s = "";
@@ -524,6 +529,7 @@ function SNAPSHOT_SCRIPT(opts) {
     if (findMode && !isInteractive) continue;
     if (overLimit && !isInteractive) continue; // pasada de recorte: solo interactivos
     if (!visible(el)) continue;
+    if (OPTS.inViewportOnly && !inViewport(el)) continue;
     let line;
     if (isInteractive) {
       if (findMode) {
@@ -711,6 +717,7 @@ async function toolSnapshot(args) {
   const opts = {};
   if (typeof args.selector === "string" && args.selector) opts.selector = args.selector;
   if (args.interactive_only === true) opts.interactiveOnly = true;
+  if (args.in_viewport_only === true) opts.inViewportOnly = true;
   if (typeof args.max_chars === "number" && args.max_chars > 0) opts.maxChars = args.max_chars;
   const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`);
   if (out.matched_selector === false)
