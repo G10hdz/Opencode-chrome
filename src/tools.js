@@ -132,8 +132,9 @@ export const TOOLS = [
   },
   {
     name: "screenshot",
-    description: "Capture a PNG screenshot of the tab, returned as base64.",
-    schema: { tabId },
+    description:
+      "Capture a PNG screenshot of the tab, returned as base64. annotate:true overlays [N] badges on the elements matching the latest snapshot refs, so the image lines up with ref numbers.",
+    schema: { tabId, annotate: z.boolean().optional() },
   },
   {
     name: "wait_for",

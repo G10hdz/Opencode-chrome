@@ -1056,11 +1056,48 @@ async function toolGetNetworkBody(args) {
   return { body, base64Encoded: !!res.base64Encoded, truncated };
 }
 
+// overlay efímero con badges [N] sobre los refs del último snapshot (set-of-marks):
+// los números son los refs, así la imagen se correlaciona con el snapshot directo
+const MARKS_ID = "__oc_marks";
+const MARKS_REMOVE = `(() => { const b = document.getElementById(${JSON.stringify(MARKS_ID)}); if (b) b.remove(); return true; })()`;
+function MARKS_INJECT(marks) {
+  return `(() => {
+    const old = document.getElementById(${JSON.stringify(MARKS_ID)});
+    if (old) old.remove();
+    const box = document.createElement("div");
+    box.id = ${JSON.stringify(MARKS_ID)};
+    let placed = 0;
+    for (const m of ${JSON.stringify(marks)}) {
+      const el = document.querySelector(m.sel);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
+      const b = document.createElement("span");
+      b.textContent = m.n;
+      b.setAttribute("style", "position:fixed;left:" + r.left + "px;top:" + r.top + "px;z-index:2147483647;background:#111;color:#fff;font:11px monospace;padding:1px 4px;border-radius:2px;pointer-events:none;");
+      box.appendChild(b);
+      placed++;
+    }
+    document.documentElement.appendChild(box);
+    return placed;
+  })()`;
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
-  const res = await cdp(tabId, "Page.captureScreenshot", { format: "png" });
-  return { image: res.data };
+  let marked = 0;
+  if (args.annotate === true) {
+    const store = refStores.get(tabId);
+    const marks = store ? Object.entries(store.refs).map(([n, e]) => ({ n: Number(n), sel: e.sel })) : [];
+    if (marks.length) marked = await evaluate(tabId, MARKS_INJECT(marks));
+  }
+  try {
+    const res = await cdp(tabId, "Page.captureScreenshot", { format: "png" });
+    return { image: res.data };
+  } finally {
+    if (marked) await evaluate(tabId, MARKS_REMOVE).catch(() => {});
+  }
 }
 
 async function toolWaitFor(args) {

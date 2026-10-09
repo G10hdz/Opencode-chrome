@@ -610,6 +610,18 @@ test('screenshot result comes back as MCP image content', async (t) => {
   assert.equal(content[0]?.data, 'aGVsbG8=');
 });
 
+test('screenshot forwards annotate flag to the extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'screenshot');
+    assert.equal(msg.args.annotate, true);
+    reply({ id: msg.id, result: { image: 'aGVsbG8=' } });
+  });
+  t.after(() => ws.close());
+  const response = await bridge.callTool('screenshot', { annotate: true });
+  assert.equal(response.result?.content?.[0]?.type, 'image');
+});
+
 test('bridge sends keepalive no-ops that the extension can ignore', async (t) => {
   const bridge = await startBridge(t, { OPENCODE_CHROME_KEEPALIVE_MS: '100' });
   const ws = await connectExtension(bridge.port, (msg, reply) => {
