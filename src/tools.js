@@ -54,6 +54,12 @@ export const TOOLS = [
     schema: { ref, value: z.string(), tabId },
   },
   {
+    name: "select",
+    description:
+      "Pick an <option> on a <select> by label or value, then dispatch input/change. On failure the error lists the available options.",
+    schema: { ref, option: z.string(), tabId },
+  },
+  {
     name: "screenshot",
     description: "Capture a PNG screenshot of the tab, returned as base64.",
     schema: { tabId },
