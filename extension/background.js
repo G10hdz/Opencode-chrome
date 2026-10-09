@@ -578,6 +578,26 @@ async function toolSelect(args) {
   return out;
 }
 
+async function toolScroll(args) {
+  const tabId = await resolveTabId(args);
+  if (args.ref !== undefined) {
+    const sel = await resolveRef(tabId, args.ref);
+    const ok = await evaluate(
+      tabId,
+      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); return true; })()`
+    );
+    if (!ok) throw new Error(`scroll: element not found: ${sel}`);
+    return { scrolled: true };
+  }
+  const dx = args.dx ?? 0;
+  const dy = args.dy ?? 600;
+  const pos = await evaluate(
+    tabId,
+    `(() => { scrollBy(${JSON.stringify(dx)}, ${JSON.stringify(dy)}); return { x: scrollX, y: scrollY, maxY: document.documentElement.scrollHeight - innerHeight }; })()`
+  );
+  return { scrolled: true, x: pos.x, y: pos.y, at_bottom: pos.y >= pos.maxY };
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -613,6 +633,7 @@ const TOOLS = {
   type: toolType,
   fill: toolFill,
   select: toolSelect,
+  scroll: toolScroll,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
 };

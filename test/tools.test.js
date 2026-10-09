@@ -19,6 +19,7 @@ const EXPECTED_TOOLS = [
   'navigate',
   'new_tab',
   'screenshot',
+  'scroll',
   'select',
   'snapshot',
   'type',
@@ -268,6 +269,21 @@ test('select requires an option argument', async (t) => {
   const bridge = await startBridge(t);
   const { isError } = outcome(await bridge.callTool('select', { ref: 4 }));
   assert.equal(isError, true);
+});
+
+test('scroll roundtrips position and bottom flag through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'scroll');
+    assert.equal(msg.args.dy, 400);
+    reply({ id: msg.id, result: { scrolled: true, x: 0, y: 400, at_bottom: false } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('scroll', { dy: 400 }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.scrolled, true);
+  assert.equal(result.at_bottom, false);
 });
 
 test('extension error propagates to tool result', async (t) => {
