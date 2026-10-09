@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { setImmediate } from 'node:timers/promises';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
+import { TOOLS as BRIDGE_TOOLS } from '../src/tools.js';
 import * as policy from '../extension/policy.js';
 
 const source = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
@@ -411,6 +412,17 @@ test('run_recipe gates on the attached origin and runs steps with escaped params
   await setImmediate();
   await setImmediate();
   assert.equal(w.sockets[0].sent[1].error.error_code, 'origin_not_allowed');
+});
+
+test('every tool the bridge exposes is registered in the extension TOOLS map', async () => {
+  // name contract across the WS boundary: a drifted name fails as unknown_tool
+  // only at runtime otherwise. Both sets come from executed code, not strings.
+  const w = await worker();
+  const registered = runInNewContext('Object.keys(TOOLS)', w.ctx);
+  const missing = BRIDGE_TOOLS.filter((t) => !t.local)
+    .map((t) => t.name)
+    .filter((name) => !registered.includes(name));
+  assert.deepEqual(missing, []);
 });
 
 test('events from a retired socket do not close the current connection', async () => {
