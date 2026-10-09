@@ -406,9 +406,15 @@ async function evaluate(tabId, expression) {
 
 // --- snapshot: script in-page que arma el árbol de texto y computa selectores únicos por ref ---
 
-function SNAPSHOT_SCRIPT() {
+function SNAPSHOT_SCRIPT(opts) {
+  const OPTS = opts || {};
   const MAX_LINES = 300;
-  const MAX_CHARS = 20000;
+  const MAX_CHARS = OPTS.maxChars > 0 ? Math.min(OPTS.maxChars, 50000) : 20000;
+  const findMode = OPTS.find === true;
+  const wantText = typeof OPTS.text === "string" ? OPTS.text.toLowerCase() : "";
+  const wantRole = typeof OPTS.role === "string" ? OPTS.role.toLowerCase() : "";
+  const root = OPTS.selector ? document.querySelector(OPTS.selector) : document;
+  if (!root) return { matched_selector: false, snapshot: "", refs: {} };
   const INTERACTIVE = "a,button,input,select,textarea,[role],[onclick],[tabindex],summary";
   const TEXTY = "h1,h2,h3,h4,h5,h6,label,li,th,td,p,legend";
   const lines = ["page " + JSON.stringify(document.title) + " " + JSON.stringify(location.href)];
@@ -464,7 +470,7 @@ function SNAPSHOT_SCRIPT() {
     return parts.join(" > ");
   };
 
-  const describe = (el) => {
+  const roleOf = (el) => {
     const tag = el.tagName.toLowerCase();
     let role = el.getAttribute("role");
     if (!role) {
@@ -478,7 +484,12 @@ function SNAPSHOT_SCRIPT() {
         else role = "textbox";
       } else role = tag;
     }
-    const parts = [role];
+    return role;
+  };
+
+  const describe = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const parts = [roleOf(el)];
     const name = nameOf(el);
     if (name) parts.push(JSON.stringify(name));
     if (tag === "a" && el.getAttribute("href") != null) parts.push("href=" + JSON.stringify(el.getAttribute("href")));
@@ -486,31 +497,40 @@ function SNAPSHOT_SCRIPT() {
     return parts.join(" ");
   };
 
-  for (const el of document.querySelectorAll("*")) {
+  // con selector-scoping, el root mismo puede ser match (un <main> con role, etc.)
+  const candidates = root.nodeType === 1 ? [root, ...root.querySelectorAll("*")] : root.querySelectorAll("*");
+  let matches = 0;
+  for (const el of candidates) {
     const isInteractive = el.matches(INTERACTIVE);
+    if (findMode && !isInteractive) continue;
     if (overLimit && !isInteractive) continue; // pasada de recorte: solo interactivos
     if (!visible(el)) continue;
     let line;
     if (isInteractive) {
+      if (findMode) {
+        if (wantRole && roleOf(el).toLowerCase() !== wantRole) continue;
+        if (wantText && !(nameOf(el) + " " + ownText(el)).toLowerCase().includes(wantText)) continue;
+      }
       refCount += 1;
+      matches += 1;
       line = "[ref=" + refCount + "] " + describe(el);
       // fp = identidad del elemento al momento del snapshot; se verifica antes de actuar
       refs[refCount] = { sel: selectorFor(el), fp: el.tagName.toLowerCase() + "|" + nameOf(el) };
     } else {
-      if (!el.matches(TEXTY)) continue;
+      if (findMode || OPTS.interactiveOnly || !el.matches(TEXTY)) continue;
       const txt = ownText(el);
       if (!txt) continue;
       line = el.tagName.toLowerCase() + " " + JSON.stringify(txt.slice(0, 100));
     }
     let depth = 0;
-    for (let n = el; n.parentElement; n = n.parentElement) depth++;
+    for (let n = el; n.parentElement && n !== root; n = n.parentElement) depth++;
     lines.push("  ".repeat(Math.min(depth, 12)) + line);
     chars += line.length + 1;
     if (lines.length >= MAX_LINES || chars >= MAX_CHARS) overLimit = true;
     if (lines.length >= MAX_LINES * 2) break;
   }
-  if (overLimit) lines.push("… truncated: text content omitted, take a focused snapshot if needed");
-  return { snapshot: lines.join("\n"), refs };
+  if (!findMode && overLimit) lines.push("… truncated: text content omitted, take a focused snapshot if needed");
+  return { snapshot: lines.join("\n"), refs, matches };
 }
 
 // Verificacion pre-accion del fp de un ref. nameOf debe calcularse igual que en SNAPSHOT_SCRIPT.
@@ -599,9 +619,41 @@ async function resolveRef(tabId, ref) {
 async function toolSnapshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
-  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})()`);
+  const opts = {};
+  if (typeof args.selector === "string" && args.selector) opts.selector = args.selector;
+  if (args.interactive_only === true) opts.interactiveOnly = true;
+  if (typeof args.max_chars === "number" && args.max_chars > 0) opts.maxChars = args.max_chars;
+  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`);
+  if (out.matched_selector === false)
+    fail(
+      "element_not_found",
+      "check the selector with a full snapshot or list_tabs to confirm the page",
+      `snapshot: no element matches ${opts.selector}`
+    );
   refStores.set(tabId, { refs: out.refs });
   return { snapshot: out.snapshot };
+}
+
+// find = snapshot filtrado por texto/role: devuelve solo líneas [ref=N] de matches;
+// sus refs reemplazan el store (igual que un snapshot, los refs válidos son los últimos)
+async function toolFind(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const opts = { find: true };
+  if (typeof args.text === "string" && args.text) opts.text = args.text;
+  if (typeof args.role === "string" && args.role) opts.role = args.role;
+  if (!opts.text && !opts.role)
+    fail("invalid_argument", "pass text and/or role", "find: needs text and/or role");
+  if (typeof args.selector === "string" && args.selector) opts.selector = args.selector;
+  const out = await evaluate(tabId, `(${SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`);
+  if (out.matched_selector === false)
+    fail(
+      "element_not_found",
+      "check the selector with a full snapshot or list_tabs to confirm the page",
+      `find: no element matches ${opts.selector}`
+    );
+  refStores.set(tabId, { refs: out.refs });
+  return { matches: out.matches ?? 0, snapshot: out.snapshot };
 }
 
 // read-only: scrollea hasta el fondo (hidrata secciones lazy) y devuelve innerText del selector
@@ -942,6 +994,7 @@ const TOOLS = {
   activate_tab: (a) => handleCloseActivate("activate_tab", a),
   navigate: toolNavigate,
   snapshot: toolSnapshot,
+  find: toolFind,
   read_text: toolReadText,
   click: toolClick,
   hover: toolHover,
