@@ -14,7 +14,9 @@ const EXPECTED_TOOLS = [
   'activate_tab',
   'click',
   'close_tab',
+  'drag',
   'fill',
+  'hover',
   'list_tabs',
   'navigate',
   'new_tab',
@@ -284,6 +286,35 @@ test('scroll roundtrips position and bottom flag through fake extension', async 
   const result = JSON.parse(text);
   assert.equal(result.scrolled, true);
   assert.equal(result.at_bottom, false);
+});
+
+test('hover and drag forward through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const seen = [];
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    seen.push(msg.tool);
+    if (msg.tool === 'hover') {
+      assert.equal(msg.args.ref, 5);
+      reply({ id: msg.id, result: { hovered: true, x: 10, y: 20 } });
+    } else {
+      assert.equal(msg.tool, 'drag');
+      assert.equal(msg.args.from, 5);
+      assert.equal(msg.args.to, 9);
+      reply({ id: msg.id, result: { dragged: true } });
+    }
+  });
+  t.after(() => ws.close());
+  const hoverOut = outcome(await bridge.callTool('hover', { ref: 5 }));
+  const dragOut = outcome(await bridge.callTool('drag', { from: 5, to: 9 }));
+  assert.equal(hoverOut.isError, false);
+  assert.equal(dragOut.isError, false);
+  assert.deepEqual(seen, ['hover', 'drag']);
+});
+
+test('drag requires both from and to', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError } = outcome(await bridge.callTool('drag', { from: 5 }));
+  assert.equal(isError, true);
 });
 
 test('extension error propagates to tool result', async (t) => {
