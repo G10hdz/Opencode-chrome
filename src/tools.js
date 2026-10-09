@@ -33,7 +33,7 @@ export const TOOLS = [
   {
     name: "snapshot",
     description:
-      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000).",
+      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000). Sensitive fields (passwords, card and identity numbers) appear redacted with a sensitive=<reason> marker and reject agent input with human_takeover_required.",
     schema: {
       tabId,
       selector: z.string().optional(),
