@@ -22,6 +22,7 @@ const EXPECTED_TOOLS = [
   'list_tabs',
   'navigate',
   'new_tab',
+  'read_text',
   'screenshot',
   'scroll',
   'select',
@@ -368,6 +369,19 @@ test('get_network_body requires a requestId', async (t) => {
   const bridge = await startBridge(t);
   const { isError } = outcome(await bridge.callTool('get_network_body', {}));
   assert.equal(isError, true);
+});
+
+test('read_text roundtrips extracted text through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'read_text');
+    assert.equal(msg.args.selector, 'article');
+    reply({ id: msg.id, result: { text: 'hola mundo' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('read_text', { selector: 'article' }));
+  assert.equal(isError, false);
+  assert.equal(JSON.parse(text).text, 'hola mundo');
 });
 
 test('extension error propagates to tool result', async (t) => {
