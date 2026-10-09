@@ -470,6 +470,12 @@ function SNAPSHOT_SCRIPT(opts) {
     return parts.join(" > ");
   };
 
+  const hashStr = (s) => {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return h;
+  };
+
   const roleOf = (el) => {
     const tag = el.tagName.toLowerCase();
     let role = el.getAttribute("role");
@@ -514,8 +520,17 @@ function SNAPSHOT_SCRIPT(opts) {
       refCount += 1;
       matches += 1;
       line = "[ref=" + refCount + "] " + describe(el);
-      // fp = identidad del elemento al momento del snapshot; se verifica antes de actuar
-      refs[refCount] = { sel: selectorFor(el), fp: el.tagName.toLowerCase() + "|" + nameOf(el) };
+      // fp = identidad del elemento al momento del snapshot; se verifica antes de actuar.
+      // {t:tag, n:name, r:role, c:classHash} — los tiers de resolveRef usan n/t para re-identificar.
+      refs[refCount] = {
+        sel: selectorFor(el),
+        fp: {
+          t: el.tagName.toLowerCase(),
+          n: nameOf(el),
+          r: roleOf(el),
+          c: hashStr(typeof el.className === "string" ? el.className : ""),
+        },
+      };
     } else {
       if (findMode || OPTS.interactiveOnly || !el.matches(TEXTY)) continue;
       const txt = ownText(el);
@@ -533,19 +548,80 @@ function SNAPSHOT_SCRIPT(opts) {
   return { snapshot: lines.join("\n"), refs, matches };
 }
 
-// Verificacion pre-accion del fp de un ref. nameOf debe calcularse igual que en SNAPSHOT_SCRIPT.
+// Verificacion pre-accion del fp de un ref. nameOf/roleOf/hashStr/selectorFor deben
+// calcularse igual que en SNAPSHOT_SCRIPT (AGENTS.md invariant).
+// Tiers: exact (sel+fp intactos) > reidentified (sel murio pero tag+name unico) >
+// stable (sel resuelve pero el fp driftó) > not found.
 function REF_CHECK_SCRIPT(sel, fp) {
   return `(() => {
-    const el = document.querySelector(${JSON.stringify(sel)});
-    if (!el) return { found: false };
-    let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
-    if (!name) {
-      if (el.labels && el.labels[0]) name = el.labels[0].innerText;
-      else if (el.type === "submit" || el.type === "button") name = el.value || "";
-      else name = el.innerText || el.value || el.placeholder || "";
-    }
-    name = name.replace(/\\s+/g, " ").trim().slice(0, 80);
-    return { found: true, match: (el.tagName.toLowerCase() + "|" + name) === ${JSON.stringify(fp)} };
+    const FP = ${JSON.stringify(fp)};
+    const SEL = ${JSON.stringify(sel)};
+    const INTERACTIVE = "a,button,input,select,textarea,[role],[onclick],[tabindex],summary";
+    const hashStr = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
+    const visible = (el) => {
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden") return false;
+      return el.getClientRects().length > 0;
+    };
+    const nameOf = (el) => {
+      let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+      if (!name) {
+        if (el.labels && el.labels[0]) name = el.labels[0].innerText;
+        else if (el.type === "submit" || el.type === "button") name = el.value || "";
+        else name = el.innerText || el.value || el.placeholder || "";
+      }
+      return name.replace(/\\s+/g, " ").trim().slice(0, 80);
+    };
+    const roleOf = (el) => {
+      const tag = el.tagName.toLowerCase();
+      let role = el.getAttribute("role");
+      if (!role) {
+        if (tag === "a") role = "link";
+        else if (tag === "button") role = "button";
+        else if (tag === "select") role = "combobox";
+        else if (tag === "textarea") role = "textbox";
+        else if (tag === "input") {
+          if (el.type === "checkbox" || el.type === "radio") role = el.type;
+          else if (el.type === "submit" || el.type === "button") role = "button";
+          else role = "textbox";
+        } else role = tag;
+      }
+      return role;
+    };
+    const selectorFor = (el) => {
+      if (el.id && document.querySelectorAll("#" + CSS.escape(el.id)).length === 1) {
+        return "#" + CSS.escape(el.id);
+      }
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === 1 && node !== document.documentElement) {
+        if (node.id && document.querySelectorAll("#" + CSS.escape(node.id)).length === 1) {
+          parts.unshift("#" + CSS.escape(node.id));
+          break;
+        }
+        let part = node.tagName.toLowerCase();
+        const parent = node.parentElement;
+        if (parent) {
+          const sameTag = Array.prototype.filter.call(parent.children, (c) => c.tagName === node.tagName);
+          if (sameTag.length > 1) part += ":nth-of-type(" + (sameTag.indexOf(node) + 1) + ")";
+        }
+        parts.unshift(part);
+        node = parent;
+      }
+      return parts.join(" > ");
+    };
+    const fpOf = (el) => el.tagName.toLowerCase() + "|" + nameOf(el);
+    const el = document.querySelector(SEL);
+    if (el && fpOf(el) === FP.t + "|" + FP.n) return { found: true, level: "exact", sel: SEL };
+    // re-identificar: tag+name único entre los interactivos visibles; role y classHash desempatan
+    let cands = Array.prototype.filter.call(document.querySelectorAll(INTERACTIVE), (e) =>
+      visible(e) && e.tagName.toLowerCase() === FP.t && nameOf(e) === FP.n
+    );
+    if (cands.length > 1) cands = cands.filter((e) => roleOf(e) === FP.r);
+    if (cands.length > 1) cands = cands.filter((e) => hashStr(typeof e.className === "string" ? e.className : "") === FP.c);
+    if (cands.length === 1) return { found: true, level: "reidentified", sel: selectorFor(cands[0]) };
+    if (el) return { found: true, level: "stable", sel: SEL };
+    return { found: false };
   })()`;
 }
 
@@ -602,6 +678,7 @@ async function toolNavigate(args) {
   );
 }
 
+// Resuelve ref → { sel, level }. level: exact | reidentified | stable; stale_ref si no hay match.
 async function resolveRef(tabId, ref) {
   const store = refStores.get(tabId);
   const entry = store && store.refs[ref];
@@ -611,9 +688,8 @@ async function resolveRef(tabId, ref) {
   const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp));
   if (!state.found)
     fail("stale_ref", "take a fresh snapshot and use a ref from it", "element for this ref is gone, take a new snapshot");
-  if (!state.match)
-    fail("stale_ref", "take a fresh snapshot and use a ref from it", "element changed since the snapshot, take a new one");
-  return entry.sel;
+  if (state.sel !== entry.sel) entry.sel = state.sel; // reidentified: adopta el selector nuevo
+  return { sel: state.sel, level: state.level || "exact" };
 }
 
 async function toolSnapshot(args) {
@@ -706,7 +782,7 @@ async function elementCenter(tabId, sel) {
 async function toolClick(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   const point = await elementCenter(tabId, sel);
   if (!point)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `click: element not found or not visible: ${sel}`);
@@ -714,28 +790,30 @@ async function toolClick(args) {
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", ...at });
-  return { clicked: true, x: point.x, y: point.y, obscured: point.obscured };
+  return { clicked: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
 }
 
 async function toolHover(args) {
   requireArg(args, "ref");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   const point = await elementCenter(tabId, sel);
   if (!point)
     fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `hover: element not found or not visible: ${sel}`);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
-  return { hovered: true, x: point.x, y: point.y, obscured: point.obscured };
+  return { hovered: true, x: point.x, y: point.y, obscured: point.obscured, match_level: level };
 }
 
 async function toolDrag(args) {
   requireArg(args, "from");
   requireArg(args, "to");
   const tabId = await resolveTabId(args);
-  const from = await elementCenter(tabId, await resolveRef(tabId, args.from));
+  const rf = await resolveRef(tabId, args.from);
+  const from = await elementCenter(tabId, rf.sel);
   if (!from)
     fail("element_not_found", "the source element moved or vanished; take a new snapshot and retry", `drag: source ref not found or not visible`);
-  const to = await elementCenter(tabId, await resolveRef(tabId, args.to));
+  const rt = await resolveRef(tabId, args.to);
+  const to = await elementCenter(tabId, rt.sel);
   if (!to)
     fail("element_not_found", "the target element moved or vanished; take a new snapshot and retry", `drag: target ref not found or not visible`);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
@@ -746,7 +824,7 @@ async function toolDrag(args) {
     await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left" });
   }
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
-  return { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
+  return { dragged: true, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, match_level: { from: rf.level, to: rt.level } };
 }
 
 // estrategia type: focus via evaluate + Input.insertText (respeta eventos/input method), Enter como keyDown text="\r" + keyUp
@@ -754,7 +832,7 @@ async function toolType(args) {
   requireArg(args, "ref");
   requireArg(args, "text");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   await evaluate(
     tabId,
     `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); el.focus(); return true; })()`
@@ -766,7 +844,7 @@ async function toolType(args) {
     await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter });
     await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter });
   }
-  return {};
+  return { typed: true, match_level: level };
 }
 
 // fill: setter nativo del prototipo + input/change con bubbles (React/Vue
@@ -776,7 +854,7 @@ async function toolFill(args) {
   requireArg(args, "ref");
   requireArg(args, "value");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   const out = await evaluate(
     tabId,
     `(() => {
@@ -816,7 +894,7 @@ async function toolFill(args) {
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `fill: ${reason}`);
     fail("fill_failed", "check the element is editable, take a new snapshot, and retry", `fill: ${reason}`);
   }
-  return out;
+  return { ...out, match_level: level };
 }
 
 // select: match por label antes que por value; el error lista las opciones
@@ -825,7 +903,7 @@ async function toolSelect(args) {
   requireArg(args, "ref");
   requireArg(args, "option");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   const out = await evaluate(
     tabId,
     `(() => {
@@ -859,20 +937,20 @@ async function toolSelect(args) {
       fail("option_not_found", "pick one of the options listed in this error", message);
     fail("select_failed", "take a new snapshot and retry", message);
   }
-  return out;
+  return { ...out, match_level: level };
 }
 
 async function toolScroll(args) {
   const tabId = await resolveTabId(args);
   if (args.ref !== undefined) {
-    const sel = await resolveRef(tabId, args.ref);
+    const { sel, level } = await resolveRef(tabId, args.ref);
     const ok = await evaluate(
       tabId,
       `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); return true; })()`
     );
     if (!ok)
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `scroll: element not found: ${sel}`);
-    return { scrolled: true };
+    return { scrolled: true, match_level: level };
   }
   const dx = args.dx ?? 0;
   const dy = args.dy ?? 600;
@@ -889,7 +967,7 @@ async function toolUpload(args) {
   requireArg(args, "ref");
   requireArg(args, "files");
   const tabId = await resolveTabId(args);
-  const sel = await resolveRef(tabId, args.ref);
+  const { sel, level } = await resolveRef(tabId, args.ref);
   const kind = await evaluate(
     tabId,
     `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.tagName + ":" + (el.getAttribute("type") || "") : null; })()`
@@ -903,7 +981,7 @@ async function toolUpload(args) {
   if (!node.nodeId)
     fail("element_not_found", "take a new snapshot and retry", `upload: node not found via DOM domain: ${sel}`);
   await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files });
-  return { uploaded: args.files.length, files: args.files };
+  return { uploaded: args.files.length, files: args.files, match_level: level };
 }
 
 async function toolListDialogs(args) {
