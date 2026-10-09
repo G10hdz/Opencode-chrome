@@ -14,6 +14,7 @@ let connectionTimer;
 let connectionAttempt = 0;
 let connected = false;
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
+const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring buffer de red
 const debuggerSessions = new Map(); // tabId -> { attach: Promise, idle: timer }
 const ATTACHMENTS = "attachments";
 
@@ -208,7 +209,53 @@ async function ensureAttached(tabId) {
   clearTimeout(session.idle);
   // si el SW se suspende antes del timer, Chrome detacha solo al morir el contexto: aceptable v1
   session.idle = setTimeout(() => detachDebugger(tabId), DEBUGGER_IDLE_MS);
+  // Network.enable una vez por sesión; el buffer lo llena el listener onEvent
+  if (!session.network) {
+    session.network = new Promise((resolve) => {
+      chrome.debugger.sendCommand({ tabId }, "Network.enable", {}, () =>
+        resolve(!chrome.runtime.lastError)
+      );
+    });
+    await session.network;
+  }
 }
+
+const NET_RING_LIMIT = 100;
+
+function netStore(tabId) {
+  let s = netStores.get(tabId);
+  if (!s) {
+    s = { order: [], byId: new Map() };
+    netStores.set(tabId, s);
+  }
+  return s;
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source.tabId;
+  if (!debuggerSessions.has(tabId)) return; // solo tabs con debugger nuestro
+  const s = netStore(tabId);
+  if (method === "Network.requestWillBeSent") {
+    s.order.push(params.requestId);
+    s.byId.set(params.requestId, {
+      requestId: params.requestId,
+      method: params.request.method,
+      url: params.request.url,
+      type: params.type,
+      ts: params.timestamp,
+    });
+    while (s.order.length > NET_RING_LIMIT) s.byId.delete(s.order.shift());
+  } else if (method === "Network.responseReceived") {
+    const e = s.byId.get(params.requestId);
+    if (e) {
+      e.status = params.response.status;
+      e.mimeType = params.response.mimeType;
+    }
+  } else if (method === "Network.loadingFinished") {
+    const e = s.byId.get(params.requestId);
+    if (e) e.size = params.encodedDataLength;
+  }
+});
 
 function detachDebugger(tabId) {
   const session = debuggerSessions.get(tabId);
@@ -228,6 +275,7 @@ chrome.debugger.onDetach.addListener((source) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   refStores.delete(tabId);
+  netStores.delete(tabId);
   detachDebugger(tabId);
   serializeMutation(() => chrome.storage.session.get(ATTACHMENTS).then(({ [ATTACHMENTS]: attachments = {} }) => {
       delete attachments[String(tabId)];
@@ -239,7 +287,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // navegación invalida los refs: obliga a re-snapshot en vez de clickear selectores viejos
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url || info.status === "loading") refStores.delete(tabId);
+  if (info.url || info.status === "loading") {
+    refStores.delete(tabId);
+    netStores.delete(tabId);
+  }
   if (!info.url) return;
   serializeMutation(async () => {
     const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
@@ -651,6 +702,30 @@ async function toolUpload(args) {
   return { uploaded: args.files.length, files: args.files };
 }
 
+async function toolListNetwork(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const s = netStores.get(tabId);
+  let rows = s ? s.order.map((id) => s.byId.get(id)).filter(Boolean) : [];
+  if (args.filter) rows = rows.filter((r) => r.url.includes(args.filter));
+  return { requests: rows };
+}
+
+async function toolGetNetworkBody(args) {
+  requireArg(args, "requestId");
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const res = await cdp(tabId, "Network.getResponseBody", { requestId: args.requestId });
+  const MAX = 200_000;
+  let body = res.body;
+  let truncated = false;
+  if (!res.base64Encoded && body.length > MAX) {
+    body = body.slice(0, MAX);
+    truncated = true;
+  }
+  return { body, base64Encoded: !!res.base64Encoded, truncated };
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -690,6 +765,8 @@ const TOOLS = {
   select: toolSelect,
   scroll: toolScroll,
   upload: toolUpload,
+  list_network: toolListNetwork,
+  get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
 };
