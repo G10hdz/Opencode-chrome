@@ -145,6 +145,18 @@ export const TOOLS = [
     schema: { tabId, annotate: z.boolean().optional() },
   },
   {
+    name: "list_recipes",
+    description:
+      "List site adapters installed in ~/.config/opencode-chrome/adapters/ (name, origin, description, declared params). Answered locally by the bridge; no tab needed.",
+    schema: {},
+  },
+  {
+    name: "run_recipe",
+    description:
+      "Run a site adapter from ~/.config/opencode-chrome/adapters/<name>.json on an attached tab. The adapter's declared `origin` must be within the attachment's reach (exact or allowlisted). Steps: navigate, wait_for, eval, columns — `columns` projects the last eval result into {columns, rows}. `params` fills {{key}} placeholders; inside `eval` steps each {{key}} becomes a JSON-encoded literal (write it bare, no quotes).",
+    schema: { name: z.string(), params: z.record(z.string()).optional(), tabId },
+  },
+  {
     name: "wait_download",
     description:
       "Wait for a browser download to finish (timeout_ms, default 30000). Returns the saved path, bytes, mime, source url and a sha256 of the file computed by the bridge. Downloads are global to the browser (not per-tab) and land in the user's normal download directory. Requires an attached tab.",

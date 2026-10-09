@@ -103,9 +103,10 @@ All implementable over the existing `chrome.debugger` channel:
 15. **Downloads** — `chrome.downloads` permission (new manifest entry,
     flagged for review); `wait_download` + saved-path/checksum return.
 16. **Site recipe registry** — declarative per-origin adapters
-    (`navigate → eval → map → columns`), stored under
-    `~/.opencode-chrome/adapters/`, gated by the same origin scope as
-    attachments. This is the OpenCLI moat; on top of it, AUTOFILL_SPEC's
+    (`navigate → wait_for → eval → columns`), stored under
+    `~/.config/opencode-chrome/adapters/` (alongside the token and
+    policy.json), gated by the same origin scope as attachments. This is
+    the OpenCLI moat; on top of it, AUTOFILL_SPEC's
     `form_schema`/`apply_mapping` become the first shipped recipe family.
 
 ## Security invariants (unchanged or stronger)
