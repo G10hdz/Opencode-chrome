@@ -455,6 +455,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       type: params.type,
       requestHeaders: redactHeaders(params.request.headers),
       ts: params.timestamp,
+      wallTime: params.wallTime,
     });
     while (s.order.length > NET_RING_LIMIT) s.byId.delete(s.order.shift());
   } else if (method === "Network.responseReceived") {
@@ -466,7 +467,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     }
   } else if (method === "Network.loadingFinished") {
     const e = s.byId.get(params.requestId);
-    if (e) e.size = params.encodedDataLength;
+    if (e) {
+      e.size = params.encodedDataLength;
+      e.endTs = params.timestamp;
+    }
   }
 });
 
@@ -1623,6 +1627,44 @@ async function toolListConsoleMessages(args) {
   return { messages: rows };
 }
 
+// HAR 1.2 del buffer (post-filtros, sin paginación): headers ya vienen redactados
+// del store. timings no se capturan por fase; time = requestWillBeSent→loadingFinished.
+function toHar(rows) {
+  const headers = (h) => Object.entries(h ?? {}).map(([name, value]) => ({ name, value }));
+  const entries = rows.map((r) => ({
+    startedDateTime: r.wallTime ? new Date(r.wallTime * 1000).toISOString() : null,
+    time: r.endTs !== undefined && r.ts !== undefined ? Math.max(0, Math.round((r.endTs - r.ts) * 1000)) : -1,
+    request: {
+      method: r.method ?? "GET",
+      url: r.url ?? "",
+      httpVersion: "HTTP/1.1",
+      headers: headers(r.requestHeaders),
+      queryString: [],
+      cookies: [],
+      headersSize: -1,
+      bodySize: -1,
+    },
+    response: {
+      status: r.status ?? 0,
+      statusText: "",
+      httpVersion: "HTTP/1.1",
+      headers: headers(r.responseHeaders),
+      content: { size: r.size ?? -1, mimeType: r.mimeType ?? "" },
+      redirectURL: "",
+      headersSize: -1,
+      bodySize: r.size ?? -1,
+    },
+    cache: {},
+    timings: { send: -1, wait: -1, receive: -1 },
+    _resourceType: r.type,
+  }));
+  return JSON.stringify(
+    { log: { version: "1.2", creator: { name: "opencode-chrome", version: chrome.runtime.getManifest().version }, entries } },
+    null,
+    2
+  );
+}
+
 async function toolListNetwork(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -1634,12 +1676,30 @@ async function toolListNetwork(args) {
     rows = rows.filter((r) => r.type && wanted.includes(String(r.type).toLowerCase()));
   }
   const total = rows.length;
+  // output_path sin format explícito exporta HAR (la razón de ser del flag aquí)
+  if (args.format === "har" || typeof args.output_path === "string")
+    return { har: toHar(rows), entries: rows.length };
   const offset = Number.isInteger(args.offset) && args.offset > 0 ? args.offset : 0;
   const limit = Number.isInteger(args.limit) && args.limit > 0 ? args.limit : total;
   rows = rows.slice(offset, offset + limit);
   if (args.include_headers !== true)
     rows = rows.map(({ requestHeaders, responseHeaders, ...r }) => r);
   return { requests: rows, total, offset };
+}
+
+// key names únicamente: los valores (tokens de sesión, PII) nunca salen del tab,
+// misma frontera que list_profile_keys. null = storage inaccesible (sandbox).
+async function toolListStorageKeys(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const out = await evaluate(
+    tabId,
+    `(() => {
+      const keys = (get) => { try { return Object.keys(get()); } catch { return null; } };
+      return { local_storage: keys(() => window.localStorage), session_storage: keys(() => window.sessionStorage) };
+    })()`
+  );
+  return { local_storage: out?.local_storage ?? null, session_storage: out?.session_storage ?? null };
 }
 
 async function toolGetNetworkBody(args) {
@@ -1979,6 +2039,7 @@ const TOOLS = {
   list_dialogs: toolListDialogs,
   handle_dialog: toolHandleDialog,
   list_network: toolListNetwork,
+  list_storage_keys: toolListStorageKeys,
   list_console_messages: toolListConsoleMessages,
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,

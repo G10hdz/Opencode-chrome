@@ -33,6 +33,7 @@ const EXPECTED_TOOLS = [
   'list_network',
   'list_profile_keys',
   'list_recipes',
+  'list_storage_keys',
   'list_tabs',
   'navigate',
   'new_tab',

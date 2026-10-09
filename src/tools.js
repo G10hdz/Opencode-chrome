@@ -175,7 +175,7 @@ export const TOOLS = [
   {
     name: "list_network",
     description:
-      "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. filter matches substring of url; resource_types scopes by CDP type (XHR, Fetch, Document, Stylesheet...); offset/limit paginate (returns total). include_headers adds request/response headers with credentials (authorization, cookie, set-cookie, csrf tokens) redacted.",
+      "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. filter matches substring of url; resource_types scopes by CDP type (XHR, Fetch, Document, Stylesheet...); offset/limit paginate (returns total). include_headers adds request/response headers with credentials (authorization, cookie, set-cookie, csrf tokens) redacted. format:'har' returns the filtered set unpaginated as a HAR 1.2 document; output_path writes that HAR to a file and returns {path, bytes}.",
     schema: {
       tabId,
       filter: z.string().optional(),
@@ -183,7 +183,15 @@ export const TOOLS = [
       offset: z.number().int().nonnegative().optional(),
       limit: z.number().int().positive().optional(),
       include_headers: z.boolean().optional(),
+      format: z.enum(["json", "har"]).optional(),
+      output_path: outputPath,
     },
+  },
+  {
+    name: "list_storage_keys",
+    description:
+      "Key names present in the page's localStorage and sessionStorage (values never leave the tab — same boundary as list_profile_keys). Useful to check auth/session state without exposing tokens. null means the storage is inaccessible (e.g. sandboxed context).",
+    schema: { tabId },
   },
   {
     name: "list_console_messages",
@@ -261,6 +269,7 @@ const OUTPUT_FIELDS = {
   find: "snapshot",
   read_text: "text",
   get_network_body: "body",
+  list_network: "har",
 };
 
 // Devuelve el resultado reescrito, o null si la tool/args no aplican.
