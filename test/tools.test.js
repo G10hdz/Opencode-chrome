@@ -20,6 +20,7 @@ const EXPECTED_TOOLS = [
   'click',
   'close_tab',
   'drag',
+  'emulate',
   'fill',
   'find',
   'form_schema',

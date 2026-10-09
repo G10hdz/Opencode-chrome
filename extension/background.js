@@ -1699,6 +1699,74 @@ async function toolWaitFor(args) {
   return { found: true, matched };
 }
 
+// emulate: overrides de entorno por tab via Emulation/Network domains.
+// Persisten mientras el debugger esté attachado; clear:true los quita todos.
+const NET_PRESETS = {
+  offline: { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
+  "slow-3g": { offline: false, latency: 400, downloadThroughput: 50 * 1024, uploadThroughput: 50 * 1024 },
+  "fast-3g": { offline: false, latency: 150, downloadThroughput: 180 * 1024, uploadThroughput: 94 * 1024 },
+};
+
+async function toolEmulate(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const applied = {};
+  if (args.clear === true) {
+    await cdp(tabId, "Emulation.setCPUThrottlingRate", { rate: 1 });
+    await cdp(tabId, "Emulation.setEmulatedMedia", { features: [] });
+    await cdp(tabId, "Emulation.setUserAgentOverride", { userAgent: "" });
+    await cdp(tabId, "Emulation.clearGeolocationOverride", {});
+    await cdp(tabId, "Emulation.setLocaleOverride", { locale: "" }).catch(() => {});
+    await cdp(tabId, "Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    return { cleared: true };
+  }
+  if (args.network !== undefined) {
+    const preset = NET_PRESETS[args.network];
+    if (!preset)
+      fail("invalid_argument", `network presets: ${Object.keys(NET_PRESETS).join(", ")}`, `emulate: unknown network ${args.network}`);
+    await cdp(tabId, "Network.emulateNetworkConditions", preset);
+    applied.network = args.network;
+  }
+  if (args.cpu !== undefined) {
+    if (typeof args.cpu !== "number" || args.cpu < 1)
+      fail("invalid_argument", "cpu is a throttling rate >= 1 (1 = none)", `emulate: bad cpu ${args.cpu}`);
+    await cdp(tabId, "Emulation.setCPUThrottlingRate", { rate: args.cpu });
+    applied.cpu = args.cpu;
+  }
+  if (args.geolocation !== undefined) {
+    const g = args.geolocation;
+    if (typeof g?.latitude !== "number" || typeof g?.longitude !== "number")
+      fail("invalid_argument", "geolocation needs {latitude, longitude}", "emulate: bad geolocation");
+    await cdp(tabId, "Emulation.setGeolocationOverride", {
+      latitude: g.latitude,
+      longitude: g.longitude,
+      accuracy: typeof g.accuracy === "number" ? g.accuracy : 100,
+    });
+    applied.geolocation = { latitude: g.latitude, longitude: g.longitude, accuracy: g.accuracy ?? 100 };
+  }
+  const mediaFeatures = [];
+  if (args.color_scheme !== undefined)
+    mediaFeatures.push({ name: "prefers-color-scheme", value: args.color_scheme });
+  if (args.reduced_motion !== undefined)
+    mediaFeatures.push({ name: "prefers-reduced-motion", value: args.reduced_motion ? "reduce" : "no-preference" });
+  if (mediaFeatures.length) {
+    await cdp(tabId, "Emulation.setEmulatedMedia", { features: mediaFeatures });
+    if (args.color_scheme !== undefined) applied.color_scheme = args.color_scheme;
+    if (args.reduced_motion !== undefined) applied.reduced_motion = args.reduced_motion;
+  }
+  if (args.user_agent !== undefined) {
+    await cdp(tabId, "Emulation.setUserAgentOverride", { userAgent: args.user_agent });
+    applied.user_agent = true;
+  }
+  if (args.locale !== undefined) {
+    await cdp(tabId, "Emulation.setLocaleOverride", { locale: args.locale });
+    applied.locale = args.locale;
+  }
+  if (!Object.keys(applied).length)
+    fail("invalid_argument", "pass at least one override or clear:true", "emulate: nothing to apply");
+  return { applied };
+}
+
 // Emulation.setDeviceMetricsOverride persiste mientras el debugger esté attachado;
 // clear:true lo quita (Emulation.clearDeviceMetricsOverride)
 async function toolResizePage(args) {
@@ -1884,6 +1952,7 @@ const TOOLS = {
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,
   resize_page: toolResizePage,
+  emulate: toolEmulate,
   wait_for: toolWaitFor,
   wait_download: toolWaitDownload,
   run_recipe: toolRunRecipe,

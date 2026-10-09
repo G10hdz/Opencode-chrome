@@ -214,6 +214,22 @@ export const TOOLS = [
     schema: { timeout_ms: z.number().int().positive().optional(), tabId },
   },
   {
+    name: "emulate",
+    description:
+      "Apply environment overrides on the tab: network ('offline', 'slow-3g', 'fast-3g'), cpu (throttle rate >=1), geolocation {latitude, longitude, accuracy?}, color_scheme ('dark'|'light'), reduced_motion, user_agent, locale. Overrides persist while the debugger stays attached; clear:true resets all of them.",
+    schema: {
+      tabId,
+      network: z.enum(["offline", "slow-3g", "fast-3g"]).optional(),
+      cpu: z.number().optional(),
+      geolocation: z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional() }).optional(),
+      color_scheme: z.enum(["dark", "light"]).optional(),
+      reduced_motion: z.boolean().optional(),
+      user_agent: z.string().optional(),
+      locale: z.string().optional(),
+      clear: z.boolean().optional(),
+    },
+  },
+  {
     name: "resize_page",
     description:
       "Resize the page viewport via Emulation.setDeviceMetricsOverride (width/height in CSS px). The override persists while the debugger stays attached; clear:true removes it.",
