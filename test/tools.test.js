@@ -16,6 +16,7 @@ const EXPECTED_TOOLS = [
   'close_tab',
   'drag',
   'fill',
+  'find',
   'get_network_body',
   'handle_dialog',
   'hover',
@@ -482,6 +483,39 @@ test('error envelope: no extension connected reports extension_disconnected', as
   assert.equal(err.error_code, 'extension_disconnected');
   assert.match(err.remedy, /extension/);
   assert.match(err.message, /Chrome/);
+});
+
+test('snapshot forwards pruning options to the extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'snapshot');
+    assert.equal(msg.args.interactive_only, true);
+    assert.equal(msg.args.selector, 'main');
+    assert.equal(msg.args.max_chars, 500);
+    reply({ id: msg.id, result: { snapshot: 'page "t" "u"\n[ref=1] button "Go"' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(
+    await bridge.callTool('snapshot', { interactive_only: true, selector: 'main', max_chars: 500 })
+  );
+  assert.equal(isError, false);
+  assert.match(text, /ref=1/);
+});
+
+test('find returns matched refs without the page text', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'find');
+    assert.equal(msg.args.text, 'guardar');
+    assert.equal(msg.args.role, 'button');
+    reply({ id: msg.id, result: { matches: 1, snapshot: '[ref=1] button "Guardar"' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('find', { text: 'guardar', role: 'button' }));
+  assert.equal(isError, false);
+  const out = JSON.parse(text);
+  assert.equal(out.matches, 1);
+  assert.match(out.snapshot, /ref=1/);
 });
 
 test('missing extension reply times out', async (t) => {

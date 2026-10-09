@@ -33,8 +33,24 @@ export const TOOLS = [
   {
     name: "snapshot",
     description:
-      "Accessibility tree of the page as text, with [ref] markers on interactive elements.",
-    schema: { tabId },
+      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, max_chars caps output (default 20000).",
+    schema: {
+      tabId,
+      selector: z.string().optional(),
+      interactive_only: z.boolean().optional(),
+      max_chars: z.number().int().positive().optional(),
+    },
+  },
+  {
+    name: "find",
+    description:
+      "Find interactive elements by accessible-name text (substring, case-insensitive) and/or role (button, link, textbox, combobox, checkbox, radio...). Optional selector scopes the search. Returns matching [ref] lines only — refs are usable with click/type/etc.",
+    schema: {
+      text: z.string().optional(),
+      role: z.string().optional(),
+      selector: z.string().optional(),
+      tabId,
+    },
   },
   {
     name: "read_text",
