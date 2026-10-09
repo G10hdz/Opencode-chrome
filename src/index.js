@@ -45,6 +45,46 @@ function copyToClipboard(text) {
   return false;
 }
 
+// Origin allowlist opcional: ~/.config/opencode-chrome/policy.json
+// {"origin_allowlist": {"https://app.example.com": ["https://sso.example.com"]}}
+// Se empuja a la extensión al conectar — la policy vive aquí, no en la página.
+// Vacía = solo origen exacto (el default no se debilita).
+function validOrigin(s) {
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadPolicy() {
+  const file =
+    process.env.OPENCODE_CHROME_POLICY ||
+    join(homedir(), ".config", "opencode-chrome", "policy.json");
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return { origin_allowlist: {} };
+  }
+  const allow = {};
+  const src = raw?.origin_allowlist;
+  if (src && typeof src === "object") {
+    for (const [from, to] of Object.entries(src)) {
+      const fo = validOrigin(from);
+      if (!fo || !Array.isArray(to)) continue;
+      const list = to.map(validOrigin).filter(Boolean);
+      if (list.length) allow[fo] = [...new Set(list)];
+    }
+  }
+  return { origin_allowlist: allow };
+}
+
+const POLICY = loadPolicy();
+if (Object.keys(POLICY.origin_allowlist).length)
+  console.error(`opencode-chrome: origin allowlist for ${Object.keys(POLICY.origin_allowlist).length} origin(s)`);
+
 const TOKEN = loadToken();
 const copied = process.env.OPENCODE_CHROME_TOKEN ? false : copyToClipboard(TOKEN);
 console.error(
@@ -124,6 +164,8 @@ wss.on("connection", (ws, req) => {
     socket.terminate();
   }
   socket = ws;
+  // la policy se empuja en cada conexión: una reconexión con otro bridge resetea la allowlist
+  ws.send(JSON.stringify({ policy: POLICY }));
   // keepalive: no-op sin tool; la extension lo filtra y el SW recibe actividad que evita su suspension
   const keepalive = setInterval(() => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ id: -1 }));

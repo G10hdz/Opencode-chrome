@@ -24,6 +24,23 @@ test("attachedTab fails closed when the origin changes", () => {
   assert.equal(attachedTab(attachments, 8, "https://example.com"), null);
 });
 
+test("attachedTab honors the per-origin allowlist", () => {
+  const attachments = { 7: { origin: "https://app.example.com", attachedAt: 10 } };
+  const allowlist = { "https://app.example.com": ["https://sso.example.com"] };
+
+  assert.equal(attachedTab(attachments, 7, "https://sso.example.com/login", allowlist), attachments[7]);
+  assert.equal(attachedTab(attachments, 7, "https://evil.example", allowlist), null);
+  // sin allowlist ni en reversa no hay acceso
+  assert.equal(attachedTab(attachments, 7, "https://sso.example.com"), null);
+  assert.equal(attachedTab(attachments, 8, "https://sso.example.com", allowlist), null);
+  // allowlist malformada se ignora
+  assert.equal(attachedTab(attachments, 7, "https://sso.example.com", { "https://app.example.com": "sso" }), null);
+
+  const tabs = [{ id: 7, url: "https://sso.example.com/login" }];
+  assert.equal(mostRecentAttached(attachments, tabs, allowlist)?.tab.id, 7);
+  assert.equal(mostRecentAttached(attachments, tabs), null);
+});
+
 test("mostRecentAttached ignores stale entries", () => {
   const attachments = {
     1: { origin: "https://one.example", attachedAt: 10 },

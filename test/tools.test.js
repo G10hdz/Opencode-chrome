@@ -1,7 +1,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
@@ -178,7 +181,9 @@ function outcome(response) {
   return { isError: result.isError === true, text };
 }
 
-async function connectExtension(port, handler, { token = BRIDGE_TOKEN } = {}) {
+// el handler solo ve mensajes de tool (como la extension real, que filtra keepalives
+// y policy pushes); onMessage recibe todo, para tests de mensajes push del bridge
+async function connectExtension(port, handler, { token = BRIDGE_TOKEN, onMessage } = {}) {
   const url = `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
   const open = async () =>
     new Promise((resolve, reject) => {
@@ -195,7 +200,9 @@ async function connectExtension(port, handler, { token = BRIDGE_TOKEN } = {}) {
       const ws = await open();
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
-        handler(msg, (payload) => ws.send(JSON.stringify(payload)));
+        onMessage?.(msg);
+        if (typeof msg.tool === 'string')
+          handler(msg, (payload) => ws.send(JSON.stringify(payload)));
       });
       return ws;
     } catch (err) {
@@ -668,4 +675,41 @@ test('replacing the extension fails old calls without affecting new calls', asyn
   assert.equal(result.isError, true);
   assert.match(result.text, /replaced|disconnected/i);
   assert.equal(outcome(await bridge.callTool('browser_status')).isError, false);
+});
+
+// la policy vive en el bridge: al conectar, la extension recibe la allowlist
+// validada (solo origins http/https sobreviven)
+test('bridge pushes the origin allowlist to the extension on connect', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-policy-'));
+  const file = join(dir, 'policy.json');
+  writeFileSync(file, JSON.stringify({
+    origin_allowlist: {
+      'https://app.example.com': ['https://sso.example.com', 'not a url', 'chrome://x'],
+      'javascript:alert(1)': ['https://evil.example'],
+    },
+  }));
+  const bridge = await startBridge(t, { OPENCODE_CHROME_POLICY: file });
+  let onPolicy;
+  const got = new Promise((resolve) => { onPolicy = resolve; });
+  const ws = await connectExtension(bridge.port, () => {}, {
+    onMessage: (msg) => { if (msg.policy) onPolicy(msg.policy); },
+  });
+  t.after(() => ws.close());
+  const policy = await withTimeout(got, 3000, 'policy push');
+  assert.deepEqual(policy, {
+    origin_allowlist: { 'https://app.example.com': ['https://sso.example.com'] },
+  });
+});
+
+test('bridge sends an empty allowlist when no policy file exists', async (t) => {
+  const bridge = await startBridge(t, {
+    OPENCODE_CHROME_POLICY: join(tmpdir(), 'oc-policy-no-such-file.json'),
+  });
+  let onPolicy;
+  const got = new Promise((resolve) => { onPolicy = resolve; });
+  const ws = await connectExtension(bridge.port, () => {}, {
+    onMessage: (msg) => { if (msg.policy) onPolicy(msg.policy); },
+  });
+  t.after(() => ws.close());
+  assert.deepEqual(await withTimeout(got, 3000, 'policy push'), { origin_allowlist: {} });
 });

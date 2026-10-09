@@ -66,8 +66,11 @@ is JSON-stringified into text.
   element before click/type and forces a fresh snapshot if it changed. Keep
   `nameOf` identical between `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
 - Page tools resolve through `resolveTabId`, which accepts only a user-attached
-  tab whose current exact origin matches its session attachment. Do not bypass
-  this resolver with direct tab or debugger access.
+  tab whose current origin matches its session attachment — exact match, or an
+  origin in the `origin_allowlist` the bridge pushes from
+  `~/.config/opencode-chrome/policy.json` (SSO redirects). The allowlist lives
+  bridge-side only; the page can never reach it. Do not bypass this resolver
+  with direct tab or debugger access.
 - The debugger auto-detaches after idle; navigation invalidates cached refs.
 - Sensitive fields (password, `autocomplete=cc-*`, CVV/SSN-labeled inputs) are
   redacted in snapshots and any action on their ref fails with

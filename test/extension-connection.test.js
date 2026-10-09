@@ -294,6 +294,21 @@ test('actions on a sensitive ref fail with human_takeover_required', async () =>
   await assert.rejects(w.ctx.resolveRef(7, 4), (e) => e.errorCode === 'stale_ref');
 });
 
+test('a policy message extends the attachment to allowlisted origins', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  const tab = { id: 7, url: 'https://sso.example.com/login' };
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => tab;
+  await assert.rejects(w.ctx.resolveTabId({ tabId: 7 }), (e) => e.errorCode === 'tab_not_attached');
+  w.sockets[0].receive({ policy: { origin_allowlist: { 'https://app.example.com': ['https://sso.example.com'] } } });
+  assert.equal(await w.ctx.resolveTabId({ tabId: 7 }), 7);
+  tab.url = 'https://evil.example/';
+  await assert.rejects(w.ctx.resolveTabId({ tabId: 7 }), (e) => e.errorCode === 'tab_not_attached');
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];
