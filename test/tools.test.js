@@ -14,6 +14,7 @@ const EXPECTED_TOOLS = [
   'activate_tab',
   'click',
   'close_tab',
+  'fill',
   'list_tabs',
   'navigate',
   'new_tab',
@@ -277,6 +278,30 @@ test('concurrent tool calls keep their responses matched by id', async (t) => {
   assert.doesNotMatch(slowOut.text, /fast-new_tab/);
   assert.match(fastOut.text, /fast-new_tab/);
   assert.doesNotMatch(fastOut.text, /slow-list_tabs/);
+});
+
+test('fill forwards ref and value to the extension and returns its result', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'fill');
+    assert.equal(msg.args.ref, 3);
+    assert.equal(msg.args.value, 'jane@example.test');
+    reply({ id: msg.id, result: { filled: true, verified: true, actual: 'jane@example.test' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('fill', { ref: 3, value: 'jane@example.test' }));
+  assert.equal(isError, false);
+  assert.match(text, /"filled":\s*true/);
+});
+
+test('fill requires a value argument', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: {} });
+  });
+  t.after(() => ws.close());
+  const { isError } = outcome(await bridge.callTool('fill', { ref: 3 }));
+  assert.equal(isError, true);
 });
 
 test('unknown tool errors', async (t) => {

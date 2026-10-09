@@ -48,6 +48,12 @@ export const TOOLS = [
     schema: { ref, text: z.string(), tabId },
   },
   {
+    name: "fill",
+    description:
+      "Set the value of an input, textarea or contenteditable in one shot. Uses the native property setter so React/Vue controlled fields keep it, then verifies by reading the value back. Prefer over type when no autocomplete is involved.",
+    schema: { ref, value: z.string(), tabId },
+  },
+  {
     name: "screenshot",
     description: "Capture a PNG screenshot of the tab, returned as base64.",
     schema: { tabId },
