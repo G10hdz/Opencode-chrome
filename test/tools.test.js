@@ -19,6 +19,7 @@ const EXPECTED_TOOLS = [
   'navigate',
   'new_tab',
   'screenshot',
+  'select',
   'snapshot',
   'type',
   'wait_for',
@@ -245,6 +246,28 @@ test('click roundtrips the trusted-click result through fake extension', async (
   const result = JSON.parse(text);
   assert.equal(result.clicked, true);
   assert.equal(result.obscured, false);
+});
+
+test('select roundtrips the selected value through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'select');
+    assert.equal(msg.args.ref, 4);
+    assert.equal(msg.args.option, 'México');
+    reply({ id: msg.id, result: { selected: true, actual: 'MX' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('select', { ref: 4, option: 'México' }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.selected, true);
+  assert.equal(result.actual, 'MX');
+});
+
+test('select requires an option argument', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError } = outcome(await bridge.callTool('select', { ref: 4 }));
+  assert.equal(isError, true);
 });
 
 test('extension error propagates to tool result', async (t) => {

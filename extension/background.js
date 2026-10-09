@@ -542,6 +542,42 @@ async function toolFill(args) {
   return out;
 }
 
+// select: match por label antes que por value; el error lista las opciones
+// disponibles (cap 50) para que el agente reintente sin otro snapshot
+async function toolSelect(args) {
+  requireArg(args, "ref");
+  requireArg(args, "option");
+  const tabId = await resolveTabId(args);
+  const sel = await resolveRef(tabId, args.ref);
+  const out = await evaluate(
+    tabId,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return { selected: false, error: "not_found" };
+      if (el.tagName !== "SELECT") return { selected: false, error: "not_a_select:" + el.tagName.toLowerCase() };
+      const want = ${JSON.stringify(args.option)};
+      const opts = [...el.options];
+      const opt = opts.find((o) => o.label === want) ?? opts.find((o) => o.value === want);
+      if (!opt) {
+        return {
+          selected: false,
+          error: "option_not_found",
+          available: opts.map((o) => o.label || o.value).slice(0, 50),
+        };
+      }
+      opt.selected = true;
+      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return { selected: true, actual: opt.value };
+    })()`
+  );
+  if (!out.selected) {
+    const extra = out.available ? ` — available: ${out.available.join(", ")}` : "";
+    throw new Error(`select: ${out.error}${extra}`);
+  }
+  return out;
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -576,6 +612,7 @@ const TOOLS = {
   click: toolClick,
   type: toolType,
   fill: toolFill,
+  select: toolSelect,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
 };
