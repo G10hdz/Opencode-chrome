@@ -28,7 +28,8 @@
   "scripts": {
     "test": "node scripts/check-manifest.js && node --test",
     "pack": "node scripts/check-manifest.js && bash scripts/pack-extension.sh",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "test:e2e": "playwright test --config=e2e/playwright.config.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -37,5 +38,8 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "ws": "^8.18.0",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
   }
 }
