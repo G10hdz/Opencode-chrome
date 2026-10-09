@@ -500,6 +500,19 @@ function SNAPSHOT_SCRIPT(opts) {
     if (name) parts.push(JSON.stringify(name));
     if (tag === "a" && el.getAttribute("href") != null) parts.push("href=" + JSON.stringify(el.getAttribute("href")));
     if ((tag === "input" || tag === "textarea") && el.value) parts.push("value=" + JSON.stringify(String(el.value).slice(0, 80)));
+    // compound controls: el envelope inline evita el round trip click→snapshot→click
+    if (tag === "select") {
+      const opts = [...el.options].map((o) => o.label || o.value);
+      parts.push("value=" + JSON.stringify(el.value));
+      parts.push("options=" + JSON.stringify(opts.slice(0, 50)));
+      parts.push("options_total=" + opts.length);
+    } else if (tag === "input" && el.type === "file") {
+      parts.push("type=file");
+      const accept = el.getAttribute("accept");
+      if (accept) parts.push("accept=" + JSON.stringify(accept));
+    } else if (tag === "input" && /^(date|datetime-local|month|time|week)$/.test(el.type || "")) {
+      parts.push("type=" + el.type);
+    }
     return parts.join(" ");
   };
 

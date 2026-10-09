@@ -186,6 +186,57 @@ test('snapshot script assigns object fingerprints to refs', async () => {
   assert.equal(ref.fp.c, hashStr(''));
 });
 
+// corre el snapshot contra un DOM fake y devuelve {snapshot, refs}
+function runSnapshot(ctx, els, opts = {}) {
+  return runInNewContext(`(${ctx.SNAPSHOT_SCRIPT})(${JSON.stringify(opts)})`, {
+    document: {
+      title: 't',
+      documentElement: { nodeType: 1 },
+      querySelectorAll: () => els,
+      querySelector: () => null,
+    },
+    location: { href: 'http://x/' },
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    CSS: { escape: (s) => s },
+  });
+}
+
+test('snapshot serializes compound controls inline', async () => {
+  const w = await worker();
+  const select = fakeEl({
+    tagName: 'SELECT',
+    value: 'mx',
+    options: [
+      { label: 'México', value: 'mx' },
+      { label: 'Argentina', value: 'ar' },
+    ],
+  });
+  const file = fakeEl({
+    tagName: 'INPUT', type: 'file',
+    getAttribute: (k) => (k === 'accept' ? 'image/*,.pdf' : null),
+  });
+  const out = runSnapshot(w.ctx, [select, file]);
+  const selLine = out.snapshot.split('\n').find((l) => l.includes('combobox'));
+  assert.match(selLine, /options=\["México","Argentina"\]/);
+  assert.match(selLine, /options_total=2/);
+  assert.match(selLine, /value="mx"/);
+  const fileLine = out.snapshot.split('\n').find((l) => l.includes('type=file'));
+  assert.match(fileLine, /accept="image\/\*,\.pdf"/);
+});
+
+test('snapshot options list caps at 50 and reports options_total', async () => {
+  const w = await worker();
+  const select = fakeEl({
+    tagName: 'SELECT',
+    value: 'v0',
+    options: Array.from({ length: 80 }, (_, i) => ({ label: 'opt' + i, value: 'v' + i })),
+  });
+  const out = runSnapshot(w.ctx, [select]);
+  const selLine = out.snapshot.split('\n').find((l) => l.includes('combobox'));
+  assert.match(selLine, /options_total=80/);
+  assert.doesNotMatch(selLine, /opt50/);
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];
