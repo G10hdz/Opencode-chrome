@@ -91,7 +91,16 @@ async function connect() {
     if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
     handle(msg.tool, msg.args || {})
       .then((result) => send(socket, { id: msg.id, result }))
-      .catch((e) => send(socket, { id: msg.id, error: { message: e?.message || String(e) } }));
+      .catch((e) =>
+        send(socket, {
+          id: msg.id,
+          error: {
+            message: e?.message || String(e),
+            error_code: e?.errorCode ?? "internal_error",
+            remedy: e?.remedy ?? "retry the call; if it persists, report this message",
+          },
+        })
+      );
   };
 }
 
@@ -132,41 +141,63 @@ function send(socket, msg) {
   if (ws === socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
+// Tool errors carry a machine-readable code + remedy so agents can self-heal.
+function fail(errorCode, remedy, message) {
+  const e = new Error(message);
+  e.errorCode = errorCode;
+  e.remedy = remedy;
+  throw e;
+}
+
 const requireArg = (args, name) => {
-  if (args[name] === undefined || args[name] === null) throw new Error(`missing argument ${name}`);
+  if (args[name] === undefined || args[name] === null)
+    fail("missing_argument", "pass the required argument; see the tool schema", `missing argument ${name}`);
 };
 
 async function resolveTabId(args) {
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
   if (args.tabId !== undefined) {
-    if (typeof args.tabId !== "number") throw new Error("tabId must be a number");
+    if (typeof args.tabId !== "number")
+      fail("invalid_argument", "pass a numeric tabId from list_tabs", "tabId must be a number");
     const tab = await chrome.tabs.get(args.tabId).catch(() => null);
-    if (!tab || !attachedTab(attachments, tab.id, tab.url)) throw new Error("tab is not attached or origin changed");
+    if (!tab || !attachedTab(attachments, tab.id, tab.url))
+      fail(
+        "tab_not_attached",
+        "attach the tab via the extension icon; if it navigated to a different origin, attach it again there",
+        "tab is not attached or origin changed"
+      );
     return tab.id;
   }
   const tabs = await chrome.tabs.query({});
   const recent = mostRecentAttached(attachments, tabs);
-  if (!recent) throw new Error("no attached tab");
+  if (!recent)
+    fail("no_attached_tab", "focus a tab and click the extension icon to attach it, then retry", "no attached tab");
   return recent.tab.id;
 }
 
 async function assertAttached(tabId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
-  if (!tab || !attachedTab(attachments, tabId, tab.url)) throw new Error("tab is no longer attached or origin changed");
+  if (!tab || !attachedTab(attachments, tabId, tab.url))
+    fail(
+      "origin_changed",
+      "the tab navigated to a different origin or was detached; re-attach it via the extension icon and retry",
+      "tab is no longer attached or origin changed"
+    );
   return tab;
 }
 
 async function toggleAttachment() {
   return serializeMutation(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error("no active tab");
+    if (!tab?.id) fail("no_active_tab", "focus a tab and retry", "no active tab");
     const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
     const key = String(tab.id);
     if (attachedTab(attachments, tab.id, tab.url)) delete attachments[key];
     else {
       const origin = exactOrigin(tab.url);
-      if (!origin) throw new Error("only http(s) tabs can be attached");
+      if (!origin)
+        fail("unsupported_scheme", "only http/https tabs can be attached", "only http(s) tabs can be attached");
       attachments[key] = { origin, attachedAt: Date.now() };
     }
     await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
@@ -183,7 +214,12 @@ async function cdp(tabId, method, params) {
   const result = await new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params, (res) => {
       const err = chrome.runtime.lastError;
-      if (err) reject(new Error(`CDP ${method}: ${err.message}`));
+      if (err) {
+        const e = new Error(`CDP ${method}: ${err.message}`);
+        e.errorCode = "cdp_error";
+        e.remedy = "retry the call; if it persists, detach and re-attach the tab";
+        reject(e);
+      }
       else resolve(res);
     });
   });
@@ -198,7 +234,12 @@ async function ensureAttached(tabId) {
     session.attach = new Promise((resolve, reject) => {
       chrome.debugger.attach({ tabId }, "1.3", () => {
         const err = chrome.runtime.lastError;
-        if (err) reject(new Error(`debugger attach: ${err.message}`));
+        if (err) {
+          const e = new Error(`debugger attach: ${err.message}`);
+          e.errorCode = "debugger_attach_failed";
+          e.remedy = "close DevTools or any other debugger on that tab and retry";
+          reject(e);
+        }
         else resolve();
       });
     });
@@ -310,7 +351,11 @@ async function evaluate(tabId, expression) {
   });
   if (res.exceptionDetails) {
     const d = res.exceptionDetails;
-    throw new Error(`page script: ${d.exception?.description || d.text}`);
+    fail(
+      "page_script_error",
+      "the in-page evaluation failed; check the selector or page state and retry",
+      `page script: ${d.exception?.description || d.text}`
+    );
   }
   return res.result?.value;
 }
@@ -461,7 +506,8 @@ async function toolNewTab(args) {
 
 async function handleCloseActivate(tool, args) {
   requireArg(args, "id");
-  if (typeof args.id !== "number") throw new Error("id must be a number");
+  if (typeof args.id !== "number")
+    fail("invalid_argument", "pass a numeric id from list_tabs", "id must be a number");
   const tabId = await resolveTabId({ tabId: args.id });
   if (tool === "close_tab") await chrome.tabs.remove(tabId);
   else await chrome.tabs.update(tabId, { active: true });
@@ -480,22 +526,29 @@ async function toolNavigate(args) {
     try {
       tab = await chrome.tabs.get(tabId);
     } catch {
-      throw new Error("tab was closed during navigation");
+      fail("tab_closed", "the tab is gone; open a new one with new_tab or use another tabId from list_tabs", "tab was closed during navigation");
     }
     if (tab.status === "complete") return { url: tab.url };
     await sleep(250);
   }
-  throw new Error("navigate: timed out waiting for load (30s)");
+  fail(
+    "navigation_timeout",
+    "the page may still be loading; retry, or poll for content with wait_for",
+    "navigate: timed out waiting for load (30s)"
+  );
 }
 
 async function resolveRef(tabId, ref) {
   const store = refStores.get(tabId);
   const entry = store && store.refs[ref];
-  if (!entry) throw new Error("ref not found, take a new snapshot");
+  if (!entry)
+    fail("stale_ref", "take a fresh snapshot and use a ref from it", "ref not found, take a new snapshot");
   await ensureAttached(tabId);
   const state = await evaluate(tabId, REF_CHECK_SCRIPT(entry.sel, entry.fp));
-  if (!state.found) throw new Error("element for this ref is gone, take a new snapshot");
-  if (!state.match) throw new Error("element changed since the snapshot, take a new one");
+  if (!state.found)
+    fail("stale_ref", "take a fresh snapshot and use a ref from it", "element for this ref is gone, take a new snapshot");
+  if (!state.match)
+    fail("stale_ref", "take a fresh snapshot and use a ref from it", "element changed since the snapshot, take a new one");
   return entry.sel;
 }
 
@@ -530,7 +583,8 @@ async function toolClick(args) {
   const tabId = await resolveTabId(args);
   const sel = await resolveRef(tabId, args.ref);
   const point = await elementCenter(tabId, sel);
-  if (!point) throw new Error(`click: element not found or not visible: ${sel}`);
+  if (!point)
+    fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `click: element not found or not visible: ${sel}`);
   const at = { x: point.x, y: point.y, button: "left", clickCount: 1 };
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", ...at, clickCount: 0 });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", ...at });
@@ -543,7 +597,8 @@ async function toolHover(args) {
   const tabId = await resolveTabId(args);
   const sel = await resolveRef(tabId, args.ref);
   const point = await elementCenter(tabId, sel);
-  if (!point) throw new Error(`hover: element not found or not visible: ${sel}`);
+  if (!point)
+    fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `hover: element not found or not visible: ${sel}`);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
   return { hovered: true, x: point.x, y: point.y, obscured: point.obscured };
 }
@@ -553,9 +608,11 @@ async function toolDrag(args) {
   requireArg(args, "to");
   const tabId = await resolveTabId(args);
   const from = await elementCenter(tabId, await resolveRef(tabId, args.from));
-  if (!from) throw new Error(`drag: source ref not found or not visible`);
+  if (!from)
+    fail("element_not_found", "the source element moved or vanished; take a new snapshot and retry", `drag: source ref not found or not visible`);
   const to = await elementCenter(tabId, await resolveRef(tabId, args.to));
-  if (!to) throw new Error(`drag: target ref not found or not visible`);
+  if (!to)
+    fail("element_not_found", "the target element moved or vanished; take a new snapshot and retry", `drag: target ref not found or not visible`);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 });
   for (let i = 1; i <= 3; i++) {
@@ -622,7 +679,18 @@ async function toolFill(args) {
       return { filled: true, verified: el.value === value, actual: el.value };
     })()`
   );
-  if (!out.filled) throw new Error(`fill: ${out.error || "could not set value"}`);
+  if (!out.filled) {
+    const reason = out.error || "could not set value";
+    if (reason.startsWith("unsupported_input_type"))
+      fail(
+        "unsupported_input_type",
+        "fill works on text inputs and textareas; use click for checkbox/radio and upload for file inputs",
+        `fill: ${reason}`
+      );
+    if (reason === "not_found")
+      fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `fill: ${reason}`);
+    fail("fill_failed", "check the element is editable, take a new snapshot, and retry", `fill: ${reason}`);
+  }
   return out;
 }
 
@@ -657,7 +725,14 @@ async function toolSelect(args) {
   );
   if (!out.selected) {
     const extra = out.available ? ` — available: ${out.available.join(", ")}` : "";
-    throw new Error(`select: ${out.error}${extra}`);
+    const message = `select: ${out.error}${extra}`;
+    if (out.error === "not_found")
+      fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", message);
+    if (out.error?.startsWith("not_a_select"))
+      fail("wrong_element_type", "use a ref that points to a <select> element", message);
+    if (out.error === "option_not_found")
+      fail("option_not_found", "pick one of the options listed in this error", message);
+    fail("select_failed", "take a new snapshot and retry", message);
   }
   return out;
 }
@@ -670,7 +745,8 @@ async function toolScroll(args) {
       tabId,
       `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.scrollIntoView({block:"center"}); return true; })()`
     );
-    if (!ok) throw new Error(`scroll: element not found: ${sel}`);
+    if (!ok)
+      fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `scroll: element not found: ${sel}`);
     return { scrolled: true };
   }
   const dx = args.dx ?? 0;
@@ -693,11 +769,14 @@ async function toolUpload(args) {
     tabId,
     `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.tagName + ":" + (el.getAttribute("type") || "") : null; })()`
   );
-  if (!kind) throw new Error(`upload: element not found: ${sel}`);
-  if (!/^INPUT:file$/i.test(kind)) throw new Error(`upload: ref is not a file input (${kind})`);
+  if (!kind)
+    fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", `upload: element not found: ${sel}`);
+  if (!/^INPUT:file$/i.test(kind))
+    fail("wrong_element_type", "the ref must point to an <input type=file>", `upload: ref is not a file input (${kind})`);
   const doc = await cdp(tabId, "DOM.getDocument", {});
   const node = await cdp(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: sel });
-  if (!node.nodeId) throw new Error(`upload: node not found via DOM domain: ${sel}`);
+  if (!node.nodeId)
+    fail("element_not_found", "take a new snapshot and retry", `upload: node not found via DOM domain: ${sel}`);
   await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files });
   return { uploaded: args.files.length, files: args.files };
 }
@@ -745,7 +824,12 @@ async function toolWaitFor(args) {
     pause: sleep,
     timeout,
   });
-  if (!found) throw new Error(`wait_for: "${args.text}" no apareció en ${timeout}ms`);
+  if (!found)
+    fail(
+      "wait_timeout",
+      "increase timeout, or check the text appears exactly as rendered in the page",
+      `wait_for: "${args.text}" no apareció en ${timeout}ms`
+    );
   return { found: true };
 }
 
@@ -773,7 +857,8 @@ const TOOLS = {
 
 async function handle(tool, args) {
   const fn = TOOLS[tool];
-  if (!fn) throw new Error(`unknown tool: ${tool}`);
+  if (!fn)
+    fail("unknown_tool", "call the tools/list endpoint to see the available tool names", `unknown tool: ${tool}`);
   return fn(args);
 }
 

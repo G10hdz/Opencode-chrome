@@ -50,7 +50,10 @@ runtime drift apart:
 3. `test/tools.test.js` — the `EXPECTED_TOOLS` list.
 
 The wire protocol is JSON both ways: bridge → extension `{id, tool, args}`,
-extension → bridge `{id, result}` or `{id, error: {message}}`. A `result`
+extension → bridge `{id, result}` or `{id, error: {message, error_code, remedy}}`.
+Every tool failure must carry a stable `error_code` (e.g. `stale_ref`,
+`origin_changed`) plus a concrete `remedy` the agent can act on; unclassified
+errors fall back to `internal_error`. A `result`
 with a string `image` field is turned into MCP image content; everything else
 is JSON-stringified into text.
 

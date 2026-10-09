@@ -57,8 +57,18 @@ let socket = null;
 let nextId = 1;
 const pending = new Map();
 
+// Errors carried over the wire/MCP keep a machine-readable code + an actionable remedy.
+function toolError(errorCode, remedy, message) {
+  const e = new Error(message);
+  e.errorCode = errorCode;
+  e.remedy = remedy;
+  return e;
+}
+
 function notConnected() {
-  return new Error(
+  return toolError(
+    "extension_disconnected",
+    "start Chrome with the extension loaded and paste the bridge token into its options page, then retry",
     `Chrome extension not connected on ws://127.0.0.1:${PORT}. ` +
       `Check Chrome is running and that the token in the extension options matches ` +
       `this bridge's token (printed to stderr at startup), then retry.`
@@ -73,7 +83,13 @@ function callExtension(tool, args) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`Extension did not respond to "${tool}" within ${TIMEOUT_MS}ms.`));
+      reject(
+        toolError(
+          "extension_timeout",
+          "retry the call; if it keeps timing out the extension service worker may be stuck, reload it on chrome://extensions",
+          `Extension did not respond to "${tool}" within ${TIMEOUT_MS}ms.`
+        )
+      );
     }, TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     socket.send(JSON.stringify({ id, tool, args }));
@@ -83,7 +99,9 @@ function callExtension(tool, args) {
 function rejectPending(message) {
   for (const [id, entry] of pending) {
     clearTimeout(entry.timer);
-    entry.reject(new Error(message));
+    entry.reject(
+      toolError("extension_disconnected", "retry once the extension reconnects", message)
+    );
     pending.delete(id);
   }
 }
@@ -123,7 +141,10 @@ wss.on("connection", (ws, req) => {
     pending.delete(msg.id);
     clearTimeout(entry.timer);
     if (msg.error) {
-      entry.reject(new Error(msg.error.message ?? JSON.stringify(msg.error)));
+      const err = new Error(msg.error.message ?? JSON.stringify(msg.error));
+      if (msg.error.error_code) err.errorCode = msg.error.error_code;
+      if (msg.error.remedy) err.remedy = msg.error.remedy;
+      entry.reject(err);
     } else {
       entry.resolve(msg.result);
     }
@@ -164,7 +185,12 @@ registerTools(server, async (tool, args) => {
     const text = typeof result === "string" ? result : JSON.stringify(result ?? null);
     return { content: [{ type: "text", text }] };
   } catch (err) {
-    return { content: [{ type: "text", text: err.message }], isError: true };
+    const error = {
+      message: err.message,
+      error_code: err.errorCode ?? "internal_error",
+      remedy: err.remedy ?? "retry the call; if it persists, report this message",
+    };
+    return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
   }
 });
 
