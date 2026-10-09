@@ -57,9 +57,10 @@ New tools in `src/tools.js` + `extension/background.js` +
 | Tool | Args | Returns | Notes |
 |---|---|---|---|
 | `form_schema` | `tabId?` | `{fields: [{ref, kind, label, name, autocomplete, options?, compound?, required, visible}]} ` | Read-only. Enumerates inputs/selects/textareas + ARIA labels, fieldset legends, autocomplete tokens. Filters honeypots; reports `hidden_count`. |
-| `fill` | `ref`, `value`, `tabId?` | `{filled, verified, actual, match_level}` | Native setter + bubbling events, then read-back verify. Trusted via CDP where possible. |
+| `fill` | `ref`, `value`, `tabId?` | `{filled, verified, actual}` (`match_level` lands with fingerprinting, PARITY_SPEC Phase 2) | Native setter + bubbling events, then read-back verify. Trusted via CDP where possible. |
 | `select` | `ref`, `option`, `tabId?` | `{selected, actual, match_level}` | Match by label then value; error lists `available[]` labels. |
 | `apply_mapping` | `mapping: {ref: profileKey}`, `profile: str`, `tabId?` | `{filled: n, failed: [{ref, reason}], unmapped_keys: []}` | The privacy boundary — see below. |
+| `list_profile_keys` | `profile: str` | `{keys: []}` | Names only, never values. |
 
 ## The PII boundary (core design point, from E-1/OpenJobAutofill)
 
