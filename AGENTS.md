@@ -8,7 +8,7 @@ Guidance for AI coding agents working in this repository. Humans: see
 Two halves that talk over a localhost WebSocket:
 
 - **Bridge** (`src/`) — a Node MCP server (stdio) that also runs a WebSocket
-  server on `127.0.0.1:9223`. opencode calls MCP tools; the bridge forwards
+  server on `127.0.0.1:19223`. opencode calls MCP tools; the bridge forwards
   each call to the extension and returns the reply.
 - **Extension** (`extension/`) — an MV3 service worker that connects to the
   bridge as a WebSocket client and drives only user-attached tabs through
