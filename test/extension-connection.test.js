@@ -26,13 +26,31 @@ async function worker(localStore = { token: 'test-token' }) {
     send(data) { this.sent.push(JSON.parse(data)); }
     receive(data) { this.onmessage?.({ data: JSON.stringify(data) }); }
   }
+  // storage.local.get fiel a chrome.storage: undefined -> todo, array -> pick,
+  // string -> {key: value}, objeto -> defaults para keys ausentes
+  const pickStore = (store, key) => {
+    if (key === undefined || key === null) return { ...store };
+    if (Array.isArray(key)) return Object.fromEntries(key.filter((k) => k in store).map((k) => [k, store[k]]));
+    if (typeof key === 'object')
+      return Object.fromEntries(Object.entries(key).map(([k, d]) => [k, k in store ? store[k] : d]));
+    return key in store ? { [key]: store[key] } : {};
+  };
   const chrome = {
-    storage: { local: { get: async () => ({ ...localStore }) }, session: { get: async () => ({}) } },
+    storage: {
+      local: { get: async (key) => pickStore(localStore, key) },
+      session: { get: async () => ({}) },
+    },
     tabs: { query: async () => [], onRemoved: event('removed'), onUpdated: event('updated') },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
     runtime: { onMessage: event('message'), onInstalled: event('installed'), onStartup: event('startup') },
     alarms: { create() {}, onAlarm: event('alarm') },
-    debugger: { onDetach: event('detach'), onEvent: event('cdpEvent') },
+    debugger: {
+      onDetach: event('detach'), onEvent: event('cdpEvent'),
+      sentCommands: [],
+      attach: (t, v, cb) => cb?.(),
+      sendCommand: (t, m, p, cb) => { chrome.debugger.sentCommands.push({ target: t, method: m, params: p }); cb?.({}); },
+      detach: (t, cb) => cb?.(),
+    },
     downloads: { search: async () => [] },
   };
   const ctx = {
@@ -462,4 +480,180 @@ test('events from a retired socket do not close the current connection', async (
   assert.deepEqual(current.sent, [{ id: 2, result: { tabs: [] } }]);
   await w.fire(3000);
   assert.equal(w.sockets.length, 2);
+});
+
+// --- autofill: form_schema / apply_mapping / list_profile_keys / press_key ---
+
+// DOM fake para FORM_SCHEMA_SCRIPT: sirve el selector de campos, lookups de
+// #id (selectorFor) y getComputedStyle por elemento via __style.
+const FIELD_SEL = 'input,select,textarea,[contenteditable="true"]';
+function formDom(els, extra = {}) {
+  return {
+    document: {
+      documentElement: { nodeType: 1 },
+      querySelector: () => null,
+      querySelectorAll: (s) => {
+        if (s === FIELD_SEL) return els;
+        if (s.startsWith('#')) return els.filter((e) => e.id === s.slice(1));
+        return [];
+      },
+    },
+    location: { href: 'http://x/' },
+    innerWidth: 1200,
+    innerHeight: 800,
+    getComputedStyle: (el) => el?.__style || { display: 'block', visibility: 'visible', opacity: '1' },
+    CSS: { escape: (s) => s },
+    ...extra,
+  };
+}
+
+test('form_schema lists labeled fields, flags sensitive and counts honeypots', async () => {
+  const w = await worker();
+  const fields = [
+    fakeEl({
+      tagName: 'INPUT', type: 'text', name: 'full_name', id: 'fn', required: true,
+      labels: [{ innerText: 'Full name' }],
+      getAttribute: (k) => ({ autocomplete: 'name' })[k] ?? null,
+    }),
+    fakeEl({
+      tagName: 'SELECT', id: 'ctry', labels: [{ innerText: 'Country' }], value: 'mx',
+      options: [
+        { label: 'México', value: 'mx', selected: true },
+        { label: 'Argentina', value: 'ar', selected: false },
+      ],
+      getAttribute: () => null,
+    }),
+    fakeEl({ tagName: 'INPUT', type: 'password', name: 'pwd', labels: [{ innerText: 'Password' }] }),
+    fakeEl({ tagName: 'INPUT', type: 'checkbox', name: 'agree', checked: true, labels: [{ innerText: 'I agree' }] }),
+    // honeypots: display:none y fuera de pantalla a la izquierda
+    fakeEl({ tagName: 'INPUT', type: 'text', name: 'nickname_hp', __style: { display: 'none', visibility: 'visible', opacity: '1' } }),
+    fakeEl({ tagName: 'INPUT', type: 'text', name: 'trap', getBoundingClientRect: () => ({ top: 0, left: -5000, right: -4900, bottom: 10 }) }),
+    // ni campo ni trampa: se ignora sin contar
+    fakeEl({ tagName: 'INPUT', type: 'hidden', name: 'csrf', value: 'tok' }),
+  ];
+  const out = runInNewContext(`(${w.ctx.FORM_SCHEMA_SCRIPT})({})`, formDom(fields));
+  assert.equal(out.hidden_count, 2);
+  assert.equal(out.fields.length, 4);
+  const [name, country, pwd, agree] = out.fields;
+  assert.deepEqual(
+    { kind: name.kind, label: name.label, name: name.name, autocomplete: name.autocomplete, required: name.required },
+    { kind: 'text', label: 'Full name', name: 'full_name', autocomplete: 'name', required: true }
+  );
+  assert.equal(country.kind, 'select');
+  // viene de otro realm de vm: se comparan campos, no deepEqual estructural
+  assert.equal(country.options.join('|'), 'México|Argentina');
+  assert.equal(country.value, 'México');
+  assert.equal(pwd.sensitive, 'password');
+  assert.equal(agree.kind, 'checkbox');
+  assert.equal(agree.checked, true);
+  // los refs quedan registrados para fill/select/apply_mapping
+  assert.equal(Object.keys(out.refs).length, 4);
+  assert.equal(out.refs[name.ref].sensitive, false);
+  assert.equal(out.refs[pwd.ref].sensitive, 'password');
+});
+
+test('form_schema resolves aria-label and placeholder as labels', async () => {
+  const w = await worker();
+  const fields = [
+    fakeEl({
+      tagName: 'INPUT', type: 'email', name: 'mail', id: 'm',
+      getAttribute: (k) => (k === 'aria-label' ? 'Correo' : null),
+    }),
+    fakeEl({ tagName: 'INPUT', type: 'text', name: 'nick', id: 'n2', placeholder: 'apodo' }),
+  ];
+  const out = runInNewContext(`(${w.ctx.FORM_SCHEMA_SCRIPT})({})`, formDom(fields));
+  assert.equal(out.fields[0].label, 'Correo');
+  assert.equal(out.fields[1].label, 'apodo');
+});
+
+test('apply_mapping fills from the stored profile without leaking values', async () => {
+  const w = await worker({
+    token: 'test-token',
+    profiles: { main: { full_name: 'Ada Lovelace', email: 'ada@x.dev' } },
+  });
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.ctx.resolveRef = async (tabId, ref) => {
+    if (ref === 2) {
+      const e = new Error('sensitive');
+      e.errorCode = 'human_takeover_required';
+      throw e;
+    }
+    return { sel: '#f' + ref, level: 'exact', sessionId: undefined };
+  };
+  const exprs = [];
+  w.ctx.evaluate = async (tabId, expr) => {
+    exprs.push(expr);
+    return { written: true, kind: 'text' };
+  };
+  w.sockets[0].receive({
+    id: 1,
+    tool: 'apply_mapping',
+    args: { tabId: 7, profile: 'main', mapping: { 1: 'full_name', 2: 'email', 3: 'missing_key' } },
+  });
+  await setImmediate();
+  await setImmediate();
+  const res = w.sockets[0].sent[0].result;
+  assert.equal(res.filled, 1);
+  assert.deepEqual(res.filled_refs, [1]);
+  assert.deepEqual(res.failed, [{ ref: 2, reason: 'human_takeover_required' }]);
+  assert.deepEqual(res.unmapped_keys, ['missing_key']);
+  // el valor se resolvió dentro de la extensión (va en el script, no en el resultado)
+  assert.ok(exprs.some((e) => e.includes('Ada Lovelace')));
+  assert.ok(!JSON.stringify(res).includes('Ada'));
+  // perfil inexistente -> error envelope, sin tocar nada
+  w.sockets[0].receive({ id: 2, tool: 'apply_mapping', args: { tabId: 7, profile: 'ghost', mapping: { 1: 'x' } } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[1].error.error_code, 'profile_not_found');
+});
+
+test('list_profile_keys returns names only, never values', async () => {
+  const w = await worker({
+    token: 'test-token',
+    profiles: { main: { full_name: 'Ada Lovelace', email: 'ada@x.dev' } },
+  });
+  w.sockets[0].open();
+  w.sockets[0].receive({ id: 1, tool: 'list_profile_keys', args: { profile: 'main' } });
+  await setImmediate();
+  await setImmediate();
+  const res = w.sockets[0].sent[0].result;
+  assert.deepEqual(res.keys.sort(), ['email', 'full_name']);
+  assert.ok(!JSON.stringify(res).includes('ada@x.dev'));
+  w.sockets[0].receive({ id: 2, tool: 'list_profile_keys', args: { profile: 'ghost' } });
+  await setImmediate();
+  await setImmediate();
+  assert.deepEqual(w.sockets[0].sent[1].result, { keys: [] });
+});
+
+test('press_key sends keyDown/keyUp with modifier bits and validates input', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const calls = () => w.chrome.debugger.sentCommands.filter((c) => c.method === 'Input.dispatchKeyEvent').map((c) => c.params);
+  w.sockets[0].receive({ id: 1, tool: 'press_key', args: { tabId: 7, key: 'Control+Enter' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(calls()[0].type, 'keyDown');
+  assert.equal(calls()[0].key, 'Enter');
+  assert.equal(calls()[0].modifiers, 2);
+  assert.equal(calls()[1].type, 'keyUp');
+  // caracteres imprimibles llevan text y sin modificadores
+  w.chrome.debugger.sentCommands.length = 0;
+  w.sockets[0].receive({ id: 2, tool: 'press_key', args: { tabId: 7, key: 'a' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(calls()[0].text, 'a');
+  assert.equal(calls()[0].modifiers, 0);
+  // modificador desconocido -> invalid_argument
+  w.sockets[0].receive({ id: 3, tool: 'press_key', args: { tabId: 7, key: 'Hyper+K' } });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
 });

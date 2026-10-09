@@ -132,6 +132,9 @@ only in files you install — there is no free-form eval tool. See
 | `type(ref, text)` | focus + type; trailing `\n` = Enter |
 | `fill(ref, value)` | set value with native setter + input/change events |
 | `select(ref, value)` | select option by label or value |
+| `press_key(key)` | key or combo on the focused element: `Enter`, `Tab`, `Escape`, arrows, `Control+A`... |
+| `form_schema(tabId?)` | form fields with `ref`, kind, label, autocomplete, required, sensitive; honeypots counted in `hidden_count` |
+| `list_profile_keys(profile)` / `apply_mapping({ref: key}, profile)` | fill a whole form from `chrome.storage.local.profiles.<profile>`; values never cross the wire, missing keys land in `unmapped_keys` |
 | `scroll(ref? or dx/dy)` | scroll element into view or page by deltas |
 | `upload(ref, paths)` | set files on a file input via CDP |
 | `list_network` / `get_network_body(id)` | captured requests and response bodies |

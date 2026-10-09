@@ -1094,6 +1094,315 @@ async function toolSelect(args) {
   return { ...out, match_level: level };
 }
 
+// --- autofill: form_schema / apply_mapping / list_profile_keys / press_key ---
+// (AUTOFILL_SPEC.md) Los valores del perfil viven en chrome.storage.local y se
+// resuelven aquí dentro: por el wire solo viajan refs y nombres de key.
+
+// Helpers duplicados de SNAPSHOT_SCRIPT a propósito (invariante AGENTS.md:
+// nameOf/roleOf/selectorFor/hashStr deben calcular igual para que los refs y
+// fingerprints sigan siendo válidos para fill/select/click).
+function FORM_SCHEMA_SCRIPT() {
+  const FIELD_SEL = 'input,select,textarea,[contenteditable="true"]';
+  const NOT_FIELD = /^(hidden|submit|button|reset|image)$/;
+  const hashStr = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
+  const visible = (el) => {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    return el.getClientRects().length > 0;
+  };
+  const isSensitive = (el) => {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "input" && tag !== "textarea") return false;
+    if ((el.type || "").toLowerCase() === "password") return "password";
+    if ((el.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) return "cc";
+    const probe = [
+      el.name, el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder"),
+      el.labels && el.labels[0] ? el.labels[0].innerText : "",
+    ].join(" ").toLowerCase().replace(/[-_]/g, " ");
+    return /\b(cvv|cvc|csc|ssn|social security|security code|card verification|tax id)\b/.test(probe) ? "credential" : false;
+  };
+  const nameOf = (el) => {
+    let name = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+    if (!name) {
+      if (el.labels && el.labels[0]) name = el.labels[0].innerText;
+      else if (el.type === "submit" || el.type === "button") name = el.value || "";
+      else name = el.innerText || (isSensitive(el) ? "" : el.value) || el.placeholder || "";
+    }
+    return name.replace(/\s+/g, " ").trim().slice(0, 80);
+  };
+  const roleOf = (el) => {
+    const tag = el.tagName.toLowerCase();
+    let role = el.getAttribute("role");
+    if (!role) {
+      if (tag === "a") role = "link";
+      else if (tag === "button") role = "button";
+      else if (tag === "select") role = "combobox";
+      else if (tag === "textarea") role = "textbox";
+      else if (tag === "input") {
+        if (el.type === "checkbox" || el.type === "radio") role = el.type;
+        else if (el.type === "submit" || el.type === "button") role = "button";
+        else role = "textbox";
+      } else role = tag;
+    }
+    return role;
+  };
+  const selectorFor = (el) => {
+    if (el.id && document.querySelectorAll("#" + CSS.escape(el.id)).length === 1) {
+      return "#" + CSS.escape(el.id);
+    }
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      if (node.id && document.querySelectorAll("#" + CSS.escape(node.id)).length === 1) {
+        parts.unshift("#" + CSS.escape(node.id));
+        break;
+      }
+      let part = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (parent) {
+        const sameTag = Array.prototype.filter.call(parent.children, (c) => c.tagName === node.tagName);
+        if (sameTag.length > 1) part += ":nth-of-type(" + (sameTag.indexOf(node) + 1) + ")";
+      }
+      parts.unshift(part);
+      node = parent;
+    }
+    return parts.join(" > ");
+  };
+  // label semántico para el mapping (más rico que nameOf): <label>, aria-label,
+  // aria-labelledby, placeholder, legend del fieldset, name/id como fallback
+  const labelOf = (el) => {
+    let label = el.labels && el.labels[0] ? el.labels[0].innerText : "";
+    if (!label) label = el.getAttribute("aria-label") || "";
+    if (!label) {
+      const ids = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+      label = ids.map((id) => (document.getElementById(id)?.innerText || "")).join(" ");
+    }
+    if (!label) label = el.placeholder || "";
+    if (!label && el.closest) {
+      const fs = el.closest("fieldset");
+      const legend = fs && fs.querySelector("legend");
+      if (legend) label = legend.innerText || "";
+    }
+    if (!label) label = el.name || el.id || "";
+    return label.replace(/\s+/g, " ").trim().slice(0, 120);
+  };
+  // honeypot: invisible aunque parezca rellenable. input[type=hidden] no es
+  // campo ni trampa: se omite sin contar. Bien debajo del fold no es trampa
+  // (offsets negativos grandes son el patrón), un cero de tamaño tampoco.
+  const offscreen = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return true;
+    return r.right < -100 || r.bottom < -100;
+  };
+  const fields = [];
+  const refs = {};
+  let hiddenCount = 0;
+  for (const el of document.querySelectorAll(FIELD_SEL)) {
+    const tag = el.tagName.toLowerCase();
+    const type = (tag === "input" ? el.type || "text" : tag).toLowerCase();
+    if (tag === "input" && NOT_FIELD.test(type)) continue;
+    if (!visible(el) || offscreen(el)) { hiddenCount++; continue; }
+    const ref = fields.length + 1;
+    const field = {
+      ref,
+      kind: el.isContentEditable ? "contenteditable" : type,
+      label: labelOf(el),
+      name: el.name || "",
+      autocomplete: el.getAttribute("autocomplete") || "",
+      required: !!(el.required || el.getAttribute("aria-required") === "true"),
+      sensitive: isSensitive(el) || undefined,
+      filled: type === "checkbox" || type === "radio" ? !!el.checked : !!el.value,
+    };
+    if (tag === "select") {
+      const opts = [...el.options];
+      field.options = opts.map((o) => o.label || o.value).slice(0, 50);
+      field.options_total = opts.length;
+      field.value = (opts.find((o) => o.selected) || {}).label || el.value || "";
+    } else if (type === "checkbox" || type === "radio") {
+      field.checked = !!el.checked;
+    } else if (type === "file") {
+      const accept = el.getAttribute("accept");
+      if (accept) field.accept = accept;
+    }
+    refs[ref] = {
+      sel: selectorFor(el),
+      sensitive: isSensitive(el),
+      fp: { t: tag, n: nameOf(el), r: roleOf(el), c: hashStr(typeof el.className === "string" ? el.className : "") },
+    };
+    fields.push(field);
+  }
+  return { fields, refs, hidden_count: hiddenCount };
+}
+
+async function toolFormSchema(args) {
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const frame = await resolveFrameSession(tabId, args.frame);
+  const out = await evaluate(tabId, `(${FORM_SCHEMA_SCRIPT})({})`, frame?.sessionId);
+  refStores.set(tabId, { refs: out.refs, sessionId: frame?.sessionId });
+  return { fields: out.fields, hidden_count: out.hidden_count };
+}
+
+// Escritura por campo para apply_mapping: cubre select (label→value),
+// checkbox/radio (truthy), contenteditable e inputs de texto. Espejo de las
+// mecánicas de toolFill/toolSelect; el resultado no repite el valor escrito
+// para no filtrar datos del perfil de vuelta al modelo.
+function FORM_WRITE_EXPR(sel, value) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(sel)});
+    if (!el) return { written: false, error: "not_found" };
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const value = ${JSON.stringify(value)};
+    const fire = () => {
+      el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    };
+    if (tag === "select") {
+      const opts = [...el.options];
+      const opt = opts.find((o) => o.label === value) ?? opts.find((o) => o.value === value);
+      if (!opt) return { written: false, error: "option_not_found" };
+      opt.selected = true;
+      fire();
+      return { written: true, kind: "select" };
+    }
+    if (tag === "input" && (type === "checkbox" || type === "radio")) {
+      el.checked = !/^(false|0|no|off|)$/i.test(value);
+      fire();
+      return { written: true, kind: type };
+    }
+    if (el.isContentEditable) {
+      el.textContent = value;
+      fire();
+      return { written: true, kind: "contenteditable" };
+    }
+    if (tag !== "input" && tag !== "textarea") return { written: false, error: "not_fillable:" + tag };
+    if (/^(hidden|submit|button|reset|image)$/.test(type)) return { written: false, error: "not_fillable:" + type };
+    el.scrollIntoView({ block: "center" });
+    el.focus();
+    const proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+    fire();
+    return { written: true, kind: type || "text" };
+  })()`;
+}
+
+async function toolApplyMapping(args) {
+  requireArg(args, "mapping");
+  requireArg(args, "profile");
+  const tabId = await resolveTabId(args);
+  // sin ensureAttached explícito: resolveRef lo hace por campo
+  const { profiles = {} } = await chrome.storage.local.get("profiles");
+  const profile = profiles[args.profile];
+  if (!profile || typeof profile !== "object")
+    fail(
+      "profile_not_found",
+      "seed profiles under chrome.storage.local.profiles (extension storage), then retry with list_profile_keys",
+      `apply_mapping: no profile named ${JSON.stringify(args.profile)}`
+    );
+  const filledRefs = [];
+  const failed = [];
+  const unmapped = new Set();
+  for (const [refKey, profileKey] of Object.entries(args.mapping)) {
+    const ref = Number(refKey);
+    if (!Number.isInteger(ref)) {
+      failed.push({ ref: refKey, reason: "invalid_ref" });
+      continue;
+    }
+    if (!(profileKey in profile)) {
+      unmapped.add(profileKey);
+      continue;
+    }
+    try {
+      const { sel, sessionId } = await resolveRef(tabId, ref);
+      const out = await evaluate(tabId, FORM_WRITE_EXPR(sel, profile[profileKey]), sessionId);
+      if (out?.written) filledRefs.push(ref);
+      else failed.push({ ref, reason: out?.error || "fill_failed" });
+    } catch (e) {
+      failed.push({ ref, reason: e.errorCode || "fill_failed" });
+    }
+  }
+  return { filled: filledRefs.length, filled_refs: filledRefs, failed, unmapped_keys: [...unmapped] };
+}
+
+async function toolListProfileKeys(args) {
+  requireArg(args, "profile");
+  const { profiles = {} } = await chrome.storage.local.get("profiles");
+  const profile = profiles[args.profile];
+  return { keys: profile && typeof profile === "object" ? Object.keys(profile) : [] };
+}
+
+// Input.dispatchKeyEvent: modifiers bitmask Alt=1 Control=2 Meta=4 Shift=8.
+// El texto va en el keyDown salvo con Alt/Ctrl/Meta (combos no producen texto);
+// Shift solo uppercases el char.
+const KEY_MOD_BITS = { alt: 1, option: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
+const KEY_NAMED = {
+  enter: { key: "Enter", code: "Enter", vk: 13, text: "\r" },
+  tab: { key: "Tab", code: "Tab", vk: 9 },
+  escape: { key: "Escape", code: "Escape", vk: 27 },
+  esc: { key: "Escape", code: "Escape", vk: 27 },
+  backspace: { key: "Backspace", code: "Backspace", vk: 8 },
+  delete: { key: "Delete", code: "Delete", vk: 46 },
+  insert: { key: "Insert", code: "Insert", vk: 45 },
+  arrowleft: { key: "ArrowLeft", code: "ArrowLeft", vk: 37 },
+  arrowup: { key: "ArrowUp", code: "ArrowUp", vk: 38 },
+  arrowright: { key: "ArrowRight", code: "ArrowRight", vk: 39 },
+  arrowdown: { key: "ArrowDown", code: "ArrowDown", vk: 40 },
+  home: { key: "Home", code: "Home", vk: 36 },
+  end: { key: "End", code: "End", vk: 35 },
+  pageup: { key: "PageUp", code: "PageUp", vk: 33 },
+  pagedown: { key: "PageDown", code: "PageDown", vk: 34 },
+  space: { key: " ", code: "Space", vk: 32, text: " " },
+};
+for (let i = 1; i <= 12; i++) KEY_NAMED["f" + i] = { key: "F" + i, code: "F" + i, vk: 111 + i };
+
+function keyDef(tok, modifiers) {
+  const named = KEY_NAMED[tok.toLowerCase()];
+  if (named) return named;
+  if (tok === " ") return KEY_NAMED.space;
+  if (tok.length === 1 && tok.charCodeAt(0) > 31) {
+    const up = tok.toUpperCase();
+    const shift = !!(modifiers & 8);
+    return {
+      key: shift ? up : tok,
+      code: /^[A-Z]$/i.test(tok) ? "Key" + up : /^[0-9]$/.test(tok) ? "Digit" + tok : "",
+      vk: up.charCodeAt(0),
+      text: shift ? up : tok,
+    };
+  }
+  return null;
+}
+
+async function toolPressKey(args) {
+  requireArg(args, "key");
+  const tabId = await resolveTabId(args);
+  await ensureAttached(tabId);
+  const parts = String(args.key).split("+").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length)
+    fail("invalid_argument", 'pass a key like "Enter", "Tab" or a combo like "Control+A"', "press_key: empty key");
+  const tok = parts[parts.length - 1];
+  let modifiers = 0;
+  for (const m of parts.slice(0, -1)) {
+    const bit = KEY_MOD_BITS[m.toLowerCase()];
+    if (!bit)
+      fail("invalid_argument", "modifiers: Alt, Control, Meta, Shift", `press_key: unknown modifier ${m}`);
+    modifiers |= bit;
+  }
+  const def = keyDef(tok, modifiers);
+  if (!def)
+    fail(
+      "invalid_argument",
+      "named keys: Enter, Tab, Escape, Backspace, Delete, Insert, arrows, Home, End, PageUp, PageDown, Space, F1-F12; or a single printable character",
+      `press_key: unknown key ${tok}`
+    );
+  const base = { modifiers, key: def.key, code: def.code, windowsVirtualKeyCode: def.vk, nativeVirtualKeyCode: def.vk };
+  const isCommand = modifiers & (1 | 2 | 4); // Alt/Control/Meta: comando, no texto
+  if (def.text && !isCommand) base.text = def.text;
+  await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyDown" });
+  await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+  return { pressed: args.key };
+}
+
 async function toolScroll(args) {
   const tabId = await resolveTabId(args);
   if (args.ref !== undefined) {
@@ -1412,6 +1721,10 @@ const TOOLS = {
   type: toolType,
   fill: toolFill,
   select: toolSelect,
+  form_schema: toolFormSchema,
+  apply_mapping: toolApplyMapping,
+  list_profile_keys: toolListProfileKeys,
+  press_key: toolPressKey,
   scroll: toolScroll,
   upload: toolUpload,
   list_dialogs: toolListDialogs,
