@@ -578,9 +578,14 @@ async function toolReadText(args) {
     returnByValue: true,
     awaitPromise: true,
   });
-  if (res.exceptionDetails) throw new Error(`page script: ${res.exceptionDetails.text}`);
+  if (res.exceptionDetails)
+    fail(
+      "page_script_error",
+      "the in-page evaluation failed; check the selector or page state and retry",
+      `page script: ${res.exceptionDetails.text}`
+    );
   if (res.result?.value === null || res.result?.value === undefined)
-    throw new Error(`read_text: no element matches ${sel}`);
+    fail("element_not_found", "check the selector, or take a snapshot to see current elements", `read_text: no element matches ${sel}`);
   return { text: res.result.value };
 }
 
