@@ -631,6 +631,26 @@ async function toolScroll(args) {
   return { scrolled: true, x: pos.x, y: pos.y, at_bottom: pos.y >= pos.maxY };
 }
 
+// upload: DOM.setFileInputFiles pone los paths directo en el input; Chrome
+// (el proceso browser) lee los archivos, la extensión nunca toca el contenido
+async function toolUpload(args) {
+  requireArg(args, "ref");
+  requireArg(args, "files");
+  const tabId = await resolveTabId(args);
+  const sel = await resolveRef(tabId, args.ref);
+  const kind = await evaluate(
+    tabId,
+    `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.tagName + ":" + (el.getAttribute("type") || "") : null; })()`
+  );
+  if (!kind) throw new Error(`upload: element not found: ${sel}`);
+  if (!/^INPUT:file$/i.test(kind)) throw new Error(`upload: ref is not a file input (${kind})`);
+  const doc = await cdp(tabId, "DOM.getDocument", {});
+  const node = await cdp(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: sel });
+  if (!node.nodeId) throw new Error(`upload: node not found via DOM domain: ${sel}`);
+  await cdp(tabId, "DOM.setFileInputFiles", { nodeId: node.nodeId, files: args.files });
+  return { uploaded: args.files.length, files: args.files };
+}
+
 async function toolScreenshot(args) {
   const tabId = await resolveTabId(args);
   await ensureAttached(tabId);
@@ -669,6 +689,7 @@ const TOOLS = {
   fill: toolFill,
   select: toolSelect,
   scroll: toolScroll,
+  upload: toolUpload,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
 };
