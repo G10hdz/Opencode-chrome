@@ -1,7 +1,13 @@
+import { writeFileSync } from "node:fs";
 import { z } from "zod";
 
 const tabId = z.number().int().optional();
 const ref = z.union([z.string(), z.number()]);
+// include_snapshot: mutaciones devuelven el árbol fresco en la misma respuesta
+// (sus refs reemplazan a los del snapshot anterior — el DOM ya cambió)
+const includeSnapshot = z.boolean().optional();
+// output_path: payloads grandes (snapshot/screenshot/body) a archivo en vez de inline
+const outputPath = z.string().optional();
 
 export const TOOLS = [
   { name: "browser_status", description: "Report bridge connection and attached tabs.", schema: {} },
@@ -27,13 +33,13 @@ export const TOOLS = [
   },
   {
     name: "navigate",
-    description: "Navigate to a URL in the tab and wait for the load to finish.",
-    schema: { url: z.string(), tabId },
+    description: "Navigate to a URL in the tab and wait for the load to finish. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { url: z.string(), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "snapshot",
     description:
-      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000), frame scopes to an embedded out-of-process iframe (frameId or url substring from list_frames; its origin must be allowlisted). Sensitive fields (passwords, card and identity numbers) appear redacted with a sensitive=<reason> marker and reject agent input with human_takeover_required.",
+      "Accessibility tree of the page as text, with [ref] markers on interactive elements. Options: selector scopes to a subtree, interactive_only drops text lines, in_viewport_only keeps only visible-on-screen elements, max_chars caps output (default 20000), frame scopes to an embedded out-of-process iframe (frameId or url substring from list_frames; its origin must be allowlisted). Sensitive fields (passwords, card and identity numbers) appear redacted with a sensitive=<reason> marker and reject agent input with human_takeover_required. output_path writes the tree to a file and returns {path, bytes} instead.",
     schema: {
       tabId,
       selector: z.string().optional(),
@@ -41,25 +47,27 @@ export const TOOLS = [
       in_viewport_only: z.boolean().optional(),
       max_chars: z.number().int().positive().optional(),
       frame: z.string().optional(),
+      output_path: outputPath,
     },
   },
   {
     name: "find",
     description:
-      "Find interactive elements by accessible-name text (substring, case-insensitive) and/or role (button, link, textbox, combobox, checkbox, radio...). Optional selector scopes the search. Returns matching [ref] lines only — refs are usable with click/type/etc.",
+      "Find interactive elements by accessible-name text (substring, case-insensitive) and/or role (button, link, textbox, combobox, checkbox, radio...). Optional selector scopes the search. Returns matching [ref] lines only — refs are usable with click/type/etc. output_path writes the matches to a file and returns {path, bytes} instead.",
     schema: {
       text: z.string().optional(),
       role: z.string().optional(),
       selector: z.string().optional(),
       frame: z.string().optional(),
+      output_path: outputPath,
       tabId,
     },
   },
   {
     name: "read_text",
     description:
-      "innerText of the element matching the CSS selector (defaults to body). Scrolls to bottom first to hydrate lazy sections; scroll:false skips it. Read-only.",
-    schema: { selector: z.string().optional(), max: z.number().int().optional(), scroll: z.boolean().optional(), frame: z.string().optional(), tabId },
+      "innerText of the element matching the CSS selector (defaults to body). Scrolls to bottom first to hydrate lazy sections; scroll:false skips it. Read-only. output_path writes the text to a file and returns {path, bytes} instead.",
+    schema: { selector: z.string().optional(), max: z.number().int().optional(), scroll: z.boolean().optional(), frame: z.string().optional(), output_path: outputPath, tabId },
   },
   {
     name: "list_frames",
@@ -69,38 +77,38 @@ export const TOOLS = [
   },
   {
     name: "click",
-    description: "Click the element captured with the given ref in the latest snapshot.",
-    schema: { ref, tabId },
+    description: "Click the element captured with the given ref in the latest snapshot. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "hover",
     description:
-      "Move the pointer over the element with the given ref (trusted mouseMoved over CDP). Useful for menus and tooltips.",
-    schema: { ref, tabId },
+      "Move the pointer over the element with the given ref (trusted mouseMoved over CDP). Useful for menus and tooltips. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "drag",
     description:
-      "Drag the element with ref `from` onto the element with ref `to`, as a trusted press-move-release mouse sequence.",
-    schema: { from: ref, to: ref, tabId },
+      "Drag the element with ref `from` onto the element with ref `to`, as a trusted press-move-release mouse sequence. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { from: ref, to: ref, tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "type",
     description:
-      "Type text into the element with the given ref; a trailing newline sends Enter.",
-    schema: { ref, text: z.string(), tabId },
+      "Type text into the element with the given ref; a trailing newline sends Enter. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, text: z.string(), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "fill",
     description:
-      "Set the value of an input, textarea or contenteditable in one shot. Uses the native property setter so React/Vue controlled fields keep it, then verifies by reading the value back. Prefer over type when no autocomplete is involved.",
-    schema: { ref, value: z.string(), tabId },
+      "Set the value of an input, textarea or contenteditable in one shot. Uses the native property setter so React/Vue controlled fields keep it, then verifies by reading the value back. Prefer over type when no autocomplete is involved. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, value: z.string(), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "select",
     description:
-      "Pick an <option> on a <select> by label or value, then dispatch input/change. On failure the error lists the available options.",
-    schema: { ref, option: z.string(), tabId },
+      "Pick an <option> on a <select> by label or value, then dispatch input/change. On failure the error lists the available options. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, option: z.string(), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "form_schema",
@@ -111,10 +119,11 @@ export const TOOLS = [
   {
     name: "apply_mapping",
     description:
-      "Fill several fields in one call from a stored autofill profile: mapping is {ref: profileKey}. Profile values are resolved inside the extension from chrome.storage.local and never cross the wire or appear in the result. Missing keys land in unmapped_keys and leave the field untouched; per-field failures land in failed[].",
+      "Fill several fields in one call from a stored autofill profile: mapping is {ref: profileKey}. Profile values are resolved inside the extension from chrome.storage.local and never cross the wire or appear in the result. Missing keys land in unmapped_keys and leave the field untouched; per-field failures land in failed[]. include_snapshot:true returns a fresh snapshot in the same response.",
     schema: {
       mapping: z.record(z.string(), z.string()),
       profile: z.string(),
+      include_snapshot: includeSnapshot,
       tabId,
     },
   },
@@ -127,20 +136,20 @@ export const TOOLS = [
   {
     name: "press_key",
     description:
-      "Press a key or modifier combo on the focused element: named keys (Enter, Tab, Escape, Backspace, Delete, arrows, Home, End, PageUp, PageDown, Space) or a single printable character, optionally prefixed with Alt+/Control+/Meta+/Shift+ (e.g. \"Control+A\", \"Shift+Tab\"). For typing text use type/fill.",
-    schema: { key: z.string(), tabId },
+      "Press a key or modifier combo on the focused element: named keys (Enter, Tab, Escape, Backspace, Delete, arrows, Home, End, PageUp, PageDown, Space) or a single printable character, optionally prefixed with Alt+/Control+/Meta+/Shift+ (e.g. \"Control+A\", \"Shift+Tab\"). For typing text use type/fill. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { key: z.string(), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "scroll",
     description:
-      "Scroll the page. With ref, scrolls that element into view; with dx/dy, scrolls the window by that many pixels (default dy 600 down). Returns the new position and at_bottom.",
-    schema: { ref: ref.optional(), dx: z.number().optional(), dy: z.number().optional(), tabId },
+      "Scroll the page. With ref, scrolls that element into view; with dx/dy, scrolls the window by that many pixels (default dy 600 down). Returns the new position and at_bottom. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref: ref.optional(), dx: z.number().optional(), dy: z.number().optional(), include_snapshot: includeSnapshot, tabId },
   },
   {
     name: "upload",
     description:
-      "Set local file paths on a <input type=file> via DOM.setFileInputFiles. files are absolute paths on the machine running Chrome.",
-    schema: { ref, files: z.array(z.string()).min(1), tabId },
+      "Set local file paths on a <input type=file> via DOM.setFileInputFiles. files are absolute paths on the machine running Chrome. include_snapshot:true returns a fresh snapshot in the same response.",
+    schema: { ref, files: z.array(z.string()).min(1), tabId, include_snapshot: includeSnapshot },
   },
   {
     name: "list_dialogs",
@@ -163,14 +172,14 @@ export const TOOLS = [
   {
     name: "get_network_body",
     description:
-      "Fetch the response body of a requestId seen in list_network. Text bodies over ~200KB are truncated; binary comes back base64Encoded.",
-    schema: { requestId: z.string(), tabId },
+      "Fetch the response body of a requestId seen in list_network. Text bodies over ~200KB are truncated; binary comes back base64Encoded. output_path writes the body to a file and returns {path, bytes} instead.",
+    schema: { requestId: z.string(), output_path: outputPath, tabId },
   },
   {
     name: "screenshot",
     description:
-      "Capture a PNG screenshot of the tab, returned as base64. annotate:true overlays [N] badges on the elements matching the latest snapshot refs, so the image lines up with ref numbers.",
-    schema: { tabId, annotate: z.boolean().optional() },
+      "Capture a PNG screenshot of the tab, returned as base64. annotate:true overlays [N] badges on the elements matching the latest snapshot refs, so the image lines up with ref numbers. output_path writes the PNG to a file and returns {path, bytes} instead.",
+    schema: { tabId, annotate: z.boolean().optional(), output_path: outputPath },
   },
   {
     name: "list_recipes",
@@ -198,6 +207,31 @@ export const TOOLS = [
     schema: { text: z.string(), timeout: z.number().int().optional(), tabId },
   },
 ];
+
+// output_path: el payload pesado va a archivo y la respuesta queda {path, bytes}.
+// Campo por tool: screenshot.image es base64, get_network_body.body lo es cuando
+// base64Encoded viene true; snapshot/find/read_text son texto plano.
+const OUTPUT_FIELDS = {
+  screenshot: "image",
+  snapshot: "snapshot",
+  find: "snapshot",
+  read_text: "text",
+  get_network_body: "body",
+};
+
+// Devuelve el resultado reescrito, o null si la tool/args no aplican.
+// writeFileSync puede lanzar: el caller lo envuelve en el error envelope.
+export function outputToFile(tool, args, result) {
+  const field = OUTPUT_FIELDS[tool];
+  const path = typeof args?.output_path === "string" ? args.output_path : null;
+  if (!field || !path || !result || typeof result[field] !== "string") return null;
+  const base64 = tool === "screenshot" || result.base64Encoded === true;
+  const buf = Buffer.from(result[field], base64 ? "base64" : "utf8");
+  writeFileSync(path, buf);
+  const out = { ...result };
+  delete out[field];
+  return { ...out, path, bytes: buf.length };
+}
 
 export function registerTools(server, call) {
   for (const { name, description, schema } of TOOLS) {

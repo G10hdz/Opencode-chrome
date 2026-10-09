@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -532,6 +532,69 @@ test('find returns matched refs without the page text', async (t) => {
   const out = JSON.parse(text);
   assert.equal(out.matches, 1);
   assert.match(out.snapshot, /ref=1/);
+});
+
+test('output_path writes the snapshot payload to a file', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-out-'));
+  const path = join(dir, 'snap.txt');
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'snapshot');
+    reply({ id: msg.id, result: { snapshot: 'page "t"\n[ref=1] a "x"' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('snapshot', { output_path: path }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.path, path);
+  assert.equal(result.snapshot, undefined);
+  assert.equal(readFileSync(path, 'utf8'), 'page "t"\n[ref=1] a "x"');
+  assert.equal(result.bytes, Buffer.byteLength('page "t"\n[ref=1] a "x"'));
+});
+
+test('output_path decodes screenshot base64 into the file', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-out-'));
+  const path = join(dir, 'shot.png');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xde, 0xad]);
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { image: png.toString('base64') } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('screenshot', { output_path: path }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.path, path);
+  assert.equal(result.bytes, png.length);
+  assert.deepEqual(readFileSync(path), png);
+});
+
+test('output_path on a non-payload tool leaves the result untouched', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-out-'));
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { clicked: true } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(
+    await bridge.callTool('click', { ref: 1, output_path: join(dir, 'nope.txt') })
+  );
+  assert.equal(isError, false);
+  assert.deepEqual(JSON.parse(text), { clicked: true });
+});
+
+test('output_path to an unwritable path returns an error envelope', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-out-'));
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { snapshot: 'x' } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(
+    await bridge.callTool('snapshot', { output_path: join(dir, 'missing', 'snap.txt') })
+  );
+  assert.equal(isError, true);
+  assert.equal(JSON.parse(text).error.error_code, 'output_write_failed');
 });
 
 test('missing extension reply times out', async (t) => {

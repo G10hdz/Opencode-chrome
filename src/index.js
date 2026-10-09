@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { WebSocketServer } from "ws";
-import { registerTools } from "./tools.js";
+import { registerTools, outputToFile } from "./tools.js";
 import { spawnSync } from "node:child_process";
 
 // default 19223 — 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
@@ -277,7 +277,20 @@ registerTools(server, async (tool, args) => {
       }
       args = { ...args, recipe };
     }
-    const result = await callExtension(tool, args);
+    let result = await callExtension(tool, args);
+    // output_path: el payload pesado (snapshot/screenshot/body/text) se escribe a
+    // archivo aquí, en el bridge — la extensión no tiene acceso a fs
+    try {
+      const written = outputToFile(tool, args, result);
+      if (written) result = written;
+    } catch (e) {
+      const error = {
+        message: `output_path: ${e.message}`,
+        error_code: "output_write_failed",
+        remedy: "pick a writable absolute path; parent directories are not created",
+      };
+      return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
+    }
     if (tool === "wait_download" && result && typeof result.path === "string") {
       try {
         result.sha256 = createHash("sha256").update(readFileSync(result.path)).digest("hex");
