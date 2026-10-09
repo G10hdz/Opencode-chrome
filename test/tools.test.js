@@ -25,6 +25,7 @@ const EXPECTED_TOOLS = [
   'select',
   'snapshot',
   'type',
+  'upload',
   'wait_for',
 ];
 
@@ -314,6 +315,27 @@ test('hover and drag forward through fake extension', async (t) => {
 test('drag requires both from and to', async (t) => {
   const bridge = await startBridge(t);
   const { isError } = outcome(await bridge.callTool('drag', { from: 5 }));
+  assert.equal(isError, true);
+});
+
+test('upload forwards files list through fake extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    assert.equal(msg.tool, 'upload');
+    assert.equal(msg.args.ref, 6);
+    assert.deepEqual(msg.args.files, ['/tmp/cv.pdf']);
+    reply({ id: msg.id, result: { uploaded: 1 } });
+  });
+  t.after(() => ws.close());
+  const { isError, text } = outcome(await bridge.callTool('upload', { ref: 6, files: ['/tmp/cv.pdf'] }));
+  assert.equal(isError, false);
+  const result = JSON.parse(text);
+  assert.equal(result.uploaded, 1);
+});
+
+test('upload requires a files array', async (t) => {
+  const bridge = await startBridge(t);
+  const { isError } = outcome(await bridge.callTool('upload', { ref: 6 }));
   assert.equal(isError, true);
 });
 

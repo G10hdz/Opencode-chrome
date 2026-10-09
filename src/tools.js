@@ -78,6 +78,12 @@ export const TOOLS = [
     schema: { ref: ref.optional(), dx: z.number().optional(), dy: z.number().optional(), tabId },
   },
   {
+    name: "upload",
+    description:
+      "Set local file paths on a <input type=file> via DOM.setFileInputFiles. files are absolute paths on the machine running Chrome.",
+    schema: { ref, files: z.array(z.string()).min(1), tabId },
+  },
+  {
     name: "screenshot",
     description: "Capture a PNG screenshot of the tab, returned as base64.",
     schema: { tabId },
