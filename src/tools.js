@@ -34,11 +34,13 @@ export const TOOLS = [
   {
     name: "navigate",
     description:
-      "Navigate the tab and wait for the load to finish. Pass exactly one of: url (go to URL), or action back/forward/reload (history navigation via Page.navigateToHistoryEntry / Page.reload). ignore_cache:true bypasses the HTTP cache during the navigation. If the landing origin is outside the attachment's reach the tab detaches (origin_changed on the next call) and include_snapshot yields detached_after_nav instead of a tree. include_snapshot:true returns a fresh snapshot in the same response.",
+      "Navigate the tab and wait for the load to finish. Pass exactly one of: url (go to URL), or action back/forward/reload (history navigation via Page.navigateToHistoryEntry / Page.reload). ignore_cache:true bypasses the HTTP cache during the navigation. init_script registers JS to run on new documents (auth/session setup) while the debugger session lives. handle_before_unload:true attaches so a beforeunload dialog is answered per the tab's dialog policy (default accept) instead of blocking. If the landing origin is outside the attachment's reach the tab detaches (origin_changed on the next call) and include_snapshot yields detached_after_nav instead of a tree. include_snapshot:true returns a fresh snapshot in the same response.",
     schema: {
       url: z.string().optional(),
       action: z.enum(["back", "forward", "reload"]).optional(),
       ignore_cache: z.boolean().optional(),
+      init_script: z.string().optional(),
+      handle_before_unload: z.boolean().optional(),
       tabId,
       include_snapshot: includeSnapshot,
     },
@@ -173,8 +175,15 @@ export const TOOLS = [
   {
     name: "list_network",
     description:
-      "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. Optional filter matches substring of url.",
-    schema: { tabId, filter: z.string().optional() },
+      "List recent network requests on the tab (ring buffer of ~100): method, url, status, type, size. filter matches substring of url; resource_types scopes by CDP type (XHR, Fetch, Document, Stylesheet...); offset/limit paginate (returns total). include_headers adds request/response headers with credentials (authorization, cookie, set-cookie, csrf tokens) redacted.",
+    schema: {
+      tabId,
+      filter: z.string().optional(),
+      resource_types: z.array(z.string()).optional(),
+      offset: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().optional(),
+      include_headers: z.boolean().optional(),
+    },
   },
   {
     name: "list_console_messages",

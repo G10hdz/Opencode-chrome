@@ -780,6 +780,75 @@ test('navigate action drives history and reload via CDP', async () => {
   assert.equal(w.sockets[0].sent[4].error.error_code, 'no_history');
 });
 
+test('navigate init_script registers an on-new-document script via CDP', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/', status: 'complete' });
+  w.chrome.tabs.update = async () => {};
+  const flush = async () => { for (let i = 0; i < 4; i++) await setImmediate(); };
+
+  w.sockets[0].receive({ id: 1, tool: 'navigate', args: { tabId: 7, url: 'https://app.example.com/next', init_script: 'window.__auth=1' } });
+  await flush();
+  await w.fire(200);
+  await flush();
+  const init = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument');
+  assert.equal(init.params.source, 'window.__auth=1');
+
+  // init_script no-string -> invalid_argument
+  w.sockets[0].receive({ id: 2, tool: 'navigate', args: { tabId: 7, url: 'https://app.example.com/', init_script: 5 } });
+  await flush();
+  assert.equal(w.sockets[0].sent[1].error.error_code, 'invalid_argument');
+});
+
+test('list_network filters by resource type, paginates and redacts headers', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const flush = async () => { for (let i = 0; i < 4; i++) await setImmediate(); };
+
+  w.sockets[0].receive({ id: 1, tool: 'list_network', args: { tabId: 7 } }); // attacha
+  await flush();
+  const fire = (method, params) => w.listeners.cdpEvent({ tabId: 7 }, method, params);
+  fire('Network.requestWillBeSent', { requestId: 'r1', type: 'Document', request: { method: 'GET', url: 'https://app.example.com/', headers: { Cookie: 'sid=secret', Accept: 'text/html' } }, timestamp: 1 });
+  fire('Network.requestWillBeSent', { requestId: 'r2', type: 'XHR', request: { method: 'GET', url: 'https://app.example.com/api', headers: { Authorization: 'Bearer t' } }, timestamp: 2 });
+  fire('Network.responseReceived', { requestId: 'r2', response: { status: 200, mimeType: 'application/json', headers: { 'Set-Cookie': 's=1', 'Content-Type': 'application/json' } }, timestamp: 3 });
+  fire('Network.requestWillBeSent', { requestId: 'r3', type: 'Stylesheet', request: { method: 'GET', url: 'https://app.example.com/s.css', headers: {} }, timestamp: 4 });
+
+  // default: sin headers en la respuesta
+  w.sockets[0].receive({ id: 2, tool: 'list_network', args: { tabId: 7 } });
+  await flush();
+  const all = w.sockets[0].sent[1].result;
+  assert.equal(all.total, 3);
+  assert.equal(all.requests[0].requestHeaders, undefined);
+
+  // resource_types + paginación
+  w.sockets[0].receive({ id: 3, tool: 'list_network', args: { tabId: 7, resource_types: ['xhr', 'stylesheet'], offset: 1, limit: 1 } });
+  await flush();
+  const paged = w.sockets[0].sent[2].result;
+  assert.equal(paged.total, 2);
+  assert.equal(paged.requests.length, 1);
+  assert.equal(paged.requests[0].requestId, 'r3');
+
+  // include_headers: redactados
+  w.sockets[0].receive({ id: 4, tool: 'list_network', args: { tabId: 7, include_headers: true, limit: 1 } });
+  await flush();
+  const withH = w.sockets[0].sent[3].result;
+  assert.equal(withH.requests[0].requestHeaders.Cookie, '[redacted]');
+  assert.equal(withH.requests[0].requestHeaders.Accept, 'text/html');
+  w.sockets[0].receive({ id: 5, tool: 'list_network', args: { tabId: 7, include_headers: true, filter: '/api' } });
+  await flush();
+  const api = w.sockets[0].sent[4].result.requests[0];
+  assert.equal(api.requestHeaders.Authorization, '[redacted]');
+  assert.equal(api.responseHeaders['Set-Cookie'], '[redacted]');
+  assert.equal(api.responseHeaders['Content-Type'], 'application/json');
+});
+
 test('wait_for accepts an array of alternative texts', async () => {
   const w = await worker();
   w.sockets[0].open();

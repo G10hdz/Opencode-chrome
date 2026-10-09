@@ -122,7 +122,7 @@ only in files you install — there is no free-form eval tool. See
 | `list_tabs` | attached tabs with id, title, url |
 | `new_tab(url?, background?)` | open a tab (active unless `background:true`) |
 | `close_tab(id)` / `activate_tab(id)` | tab management |
-| `navigate(url?, action?, ignore_cache?, tabId?)` | go to a URL or `action` back/forward/reload; waits for load |
+| `navigate(url?, action?, ignore_cache?, init_script?, handle_before_unload?, tabId?)` | go to a URL or `action` back/forward/reload; waits for load; `init_script` runs on new documents, `handle_before_unload` auto-answers that dialog |
 | `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element; `selector`, `interactive_only`, `in_viewport_only`, `max_chars`, `frame` scope it; sensitive fields are redacted |
 | `find(text?, role?, selector?, frame?)` | matching `[ref]` lines only |
 | `read_text(selector?, max?, scroll?, frame?)` | element innerText, hydrates lazy sections |
@@ -137,7 +137,7 @@ only in files you install — there is no free-form eval tool. See
 | `list_profile_keys(profile)` / `apply_mapping({ref: key}, profile)` | fill a whole form from `chrome.storage.local.profiles.<profile>`; values never cross the wire, missing keys land in `unmapped_keys` |
 | `scroll(ref? or dx/dy)` | scroll element into view or page by deltas |
 | `upload(ref, paths)` | set files on a file input via CDP |
-| `list_network` / `get_network_body(id)` | captured requests and response bodies |
+| `list_network` / `get_network_body(id)` | captured requests and response bodies; `filter`, `resource_types`, `offset`/`limit` scope it, `include_headers` adds redacted headers |
 | `list_console_messages` | console calls, uncaught exceptions and browser log entries; `types`/`filter` scope it |
 | `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
 | `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |

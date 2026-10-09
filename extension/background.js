@@ -369,6 +369,16 @@ function netStore(tabId) {
   return s;
 }
 
+// headers se capturan ya redactados: credenciales en tránsito nunca llegan al modelo
+const SENSITIVE_HEADERS = ["authorization", "cookie", "set-cookie", "proxy-authorization", "x-csrf-token", "x-xsrf-token"];
+function redactHeaders(headers) {
+  if (!headers || typeof headers !== "object") return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(headers))
+    out[k] = SENSITIVE_HEADERS.includes(k.toLowerCase()) ? "[redacted]" : String(v).slice(0, 500);
+  return out;
+}
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (!debuggerSessions.has(tabId)) return; // solo tabs con debugger nuestro
@@ -443,6 +453,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       method: params.request.method,
       url: params.request.url,
       type: params.type,
+      requestHeaders: redactHeaders(params.request.headers),
       ts: params.timestamp,
     });
     while (s.order.length > NET_RING_LIMIT) s.byId.delete(s.order.shift());
@@ -451,6 +462,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (e) {
       e.status = params.response.status;
       e.mimeType = params.response.mimeType;
+      e.responseHeaders = redactHeaders(params.response.headers);
     }
   } else if (method === "Network.loadingFinished") {
     const e = s.byId.get(params.requestId);
@@ -854,11 +866,20 @@ async function toolNavigate(args) {
   // ignore_cache deshabilita el HTTP cache durante la navegación y se restaura
   // después (Page.reload también toma ignoreCache propio)
   const bypass = args.ignore_cache === true;
-  // chrome.tabs.update no necesita el debugger; las acciones CDP y el
-  // include_snapshot post-nav sí
-  if (action || bypass || args.include_snapshot === true) await ensureAttached(tabId);
+  if (args.init_script !== undefined && typeof args.init_script !== "string")
+    fail("invalid_argument", "init_script must be a string of JS", "navigate: bad init_script");
+  // chrome.tabs.update no necesita el debugger; las acciones CDP, el snapshot
+  // post-nav, init_script y el beforeunload auto-answer sí
+  if (action || bypass || args.include_snapshot === true || args.init_script !== undefined || args.handle_before_unload === true)
+    await ensureAttached(tabId);
   try {
     if (bypass) await cdp(tabId, "Network.setCacheDisabled", { cacheDisabled: true });
+    // persiste para futuras navs del target mientras la sesión debugger viva;
+    // se limpia al detach
+    if (args.init_script !== undefined)
+      await cdp(tabId, "Page.addScriptToEvaluateOnNewDocument", { source: args.init_script });
+    // handle_before_unload: al estar attached, un beforeunload entra por
+    // javascriptDialogOpening y la política del tab (default accept) lo responde
     if (action === "reload") {
       await cdp(tabId, "Page.reload", { ignoreCache: true });
     } else if (action) {
@@ -1608,7 +1629,17 @@ async function toolListNetwork(args) {
   const s = netStores.get(tabId);
   let rows = s ? s.order.map((id) => s.byId.get(id)).filter(Boolean) : [];
   if (args.filter) rows = rows.filter((r) => r.url.includes(args.filter));
-  return { requests: rows };
+  if (Array.isArray(args.resource_types) && args.resource_types.length) {
+    const wanted = args.resource_types.map((t) => String(t).toLowerCase());
+    rows = rows.filter((r) => r.type && wanted.includes(String(r.type).toLowerCase()));
+  }
+  const total = rows.length;
+  const offset = Number.isInteger(args.offset) && args.offset > 0 ? args.offset : 0;
+  const limit = Number.isInteger(args.limit) && args.limit > 0 ? args.limit : total;
+  rows = rows.slice(offset, offset + limit);
+  if (args.include_headers !== true)
+    rows = rows.map(({ requestHeaders, responseHeaders, ...r }) => r);
+  return { requests: rows, total, offset };
 }
 
 async function toolGetNetworkBody(args) {
