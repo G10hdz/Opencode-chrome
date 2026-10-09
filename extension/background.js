@@ -58,10 +58,11 @@ async function connect() {
   if (ws && ws.readyState !== WebSocket.CLOSED) return;
   clearTimeout(reconnectTimer);
   const attempt = ++connectionAttempt;
-  const { token } = await chrome.storage.local.get("token");
+  const { token, port } = await chrome.storage.local.get(["token", "port"]);
   if (attempt !== connectionAttempt) return;
   if (!token) return; // sin token configurado en las opciones no hay a quien autenticar
-  const socket = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(token)}`);
+  const bridgePort = Number.isInteger(port) && port > 0 && port <= 65535 ? port : PORT;
+  const socket = new WebSocket(`ws://127.0.0.1:${bridgePort}/?token=${encodeURIComponent(token)}`);
   ws = socket;
   const watchConnection = (ms) => {
     clearTimeout(connectionTimer);

@@ -145,11 +145,13 @@ only in files you install — there is no free-form eval tool. See
 
 - While the agent acts, Chrome shows the "being debugged" banner. That is
   expected with CDP; the extension auto-detaches after 30s idle.
-- Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 19223, extension
-  expects the default), `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
+- Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 19223; the extension
+  follows it via the port field on the options page),
+  `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
 - Security: the WebSocket binds to 127.0.0.1 only, rejects non-extension
   origins, and requires the shared bridge/extension token. The only data
-  stored persistently is that token (in `chrome.storage.local`). Attached tab
+  stored persistently is that token and the optional port override (in
+  `chrome.storage.local`). Attached tab
   origins live only in `chrome.storage.session`. Page content never leaves
   your machine through this bridge; it goes only to your model provider,
   exactly like any opencode prompt.
@@ -163,8 +165,8 @@ only in files you install — there is no free-form eval tool. See
 - **A tool returns "Chrome extension not connected":** same causes as
   above; the bridge is up but no extension has paired.
 - **`cannot listen on 127.0.0.1:19223`:** another process holds the port.
-  Close the other bridge or MCP client, or set `OPENCODE_CHROME_PORT`. The extension expects 19223, so a
-  custom port also needs editing `PORT` in `extension/background.js`.
+  Close the other bridge or MCP client, or set `OPENCODE_CHROME_PORT` and enter
+  the same port in the extension's options page.
 - **Connection drops after sleep or a restart:** the extension retries every
   three seconds while awake and uses a Chrome alarm to recover after suspension.
   A connection that receives no messages for 45 seconds is replaced. If a tool
@@ -181,6 +183,10 @@ only in files you install — there is no free-form eval tool. See
 npm install
 npm test        # bridge tests (node:test, no Chrome needed)
 npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
+
+# real-Chrome smoke: launches Chrome, loads the extension, drives a fixture
+# page end to end. Needs a Chrome binary; kept out of `npm test` for that reason.
+node scripts/e2e-smoke.mjs   # SMOKE_HEADLESS=1 for --headless=new
 ```
 
 Icons live in `extension/icons/`, sized from the 1024px masters in `assets/`:
