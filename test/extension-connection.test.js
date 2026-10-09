@@ -8,7 +8,7 @@ import * as policy from '../extension/policy.js';
 
 const source = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
 
-async function worker() {
+async function worker(localStore = { token: 'test-token' }) {
   const sockets = [];
   const timers = new Map();
   const listeners = {};
@@ -20,14 +20,14 @@ async function worker() {
     static CLOSED = 3;
     readyState = 0;
     sent = [];
-    constructor() { sockets.push(this); }
+    constructor(url) { this.url = url; sockets.push(this); }
     open() { this.readyState = 1; this.onopen?.(); }
     close() { this.readyState = 3; this.onclose?.(); }
     send(data) { this.sent.push(JSON.parse(data)); }
     receive(data) { this.onmessage?.({ data: JSON.stringify(data) }); }
   }
   const chrome = {
-    storage: { local: { get: async () => ({ token: 'test-token' }) }, session: { get: async () => ({}) } },
+    storage: { local: { get: async () => ({ ...localStore }) }, session: { get: async () => ({}) } },
     tabs: { query: async () => [], onRemoved: event('removed'), onUpdated: event('updated') },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
     runtime: { onMessage: event('message') },
@@ -54,6 +54,16 @@ async function worker() {
     },
   };
 }
+
+test('a stored port override drives the bridge URL', async () => {
+  const w = await worker({ token: 'test-token', port: 55914 });
+  assert.match(w.sockets[0].url, /127\.0\.0\.1:55914\//);
+});
+
+test('no stored port falls back to the default bridge port', async () => {
+  const w = await worker();
+  assert.match(w.sockets[0].url, /127\.0\.0\.1:19223\//);
+});
 
 test('manual reconnect cancels the pending retry', async () => {
   const w = await worker();
