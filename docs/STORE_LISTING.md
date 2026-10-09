@@ -51,7 +51,7 @@ installed locally.
 ## Reviewer testing steps
 
 1. `npx -y opencode-chrome` (needs Node 18+) — bridge listens on
-   127.0.0.1:9223.
+   127.0.0.1:19223.
 2. Load the unpacked extension; badge shows `on` when connected.
 3. Without opencode: `websocat`/any WS client sending
    `{"id":1,"tool":"list_tabs","args":{}}` gets

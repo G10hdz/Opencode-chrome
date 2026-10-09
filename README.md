@@ -36,7 +36,7 @@ while logged in, the agent can see too.
 ## How it works
 
 A tiny local bridge (`npx opencode-chrome`, an MCP server plus a WebSocket on
-`127.0.0.1:9223`) and an MV3 extension that connects to it and drives only the
+`127.0.0.1:19223`) and an MV3 extension that connects to it and drives only the
 tabs you attach from the toolbar, using the Chrome DevTools Protocol. An
 attachment is limited to the tab's current origin. No backend, no accounts,
 no analytics.
@@ -95,7 +95,7 @@ navigation detaches the tab, so attach it again before continuing.
 
 - While the agent acts, Chrome shows the "being debugged" banner. That is
   expected with CDP; the extension auto-detaches after 30s idle.
-- Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 9223, extension
+- Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 19223, extension
   expects the default), `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
 - Security: the WebSocket binds to 127.0.0.1 only, rejects non-extension
   origins, and requires the shared bridge/extension token. The only data
@@ -173,7 +173,7 @@ iniciada, el agente también lo ve.
 ## Cómo funciona
 
 Un puente local chico (`npx opencode-chrome`, servidor MCP más un WebSocket en
-`127.0.0.1:9223`) y una extensión MV3 que se conecta a él y controla solo las
+`127.0.0.1:19223`) y una extensión MV3 que se conecta a él y controla solo las
 pestañas que adjuntas desde el ícono, mediante Chrome DevTools Protocol. Sin
 backend, sin cuentas, sin analítica.
 
