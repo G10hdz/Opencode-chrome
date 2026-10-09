@@ -94,11 +94,22 @@ symmetric; with no file the policy is strict exact-origin.
 | `new_tab(url?)` | open a tab (active) |
 | `close_tab(id)` / `activate_tab(id)` | tab management |
 | `navigate(url, tabId?)` | navigate and wait for load |
-| `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element |
-| `click(ref)` | resolve ref and click |
+| `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element; `selector`, `interactive_only`, `in_viewport_only`, `max_chars`, `frame` scope it; sensitive fields are redacted |
+| `find(text?, role?, selector?, frame?)` | matching `[ref]` lines only |
+| `read_text(selector?, max?, scroll?, frame?)` | element innerText, hydrates lazy sections |
+| `list_frames` | frame tree with OOPIF session ids and allowlist status |
+| `click(ref)` / `hover(ref)` | trusted CDP pointer actions |
+| `drag(from, to)` | trusted drag between refs of the same frame |
 | `type(ref, text)` | focus + type; trailing `\n` = Enter |
-| `screenshot(tabId?)` | PNG (base64) |
+| `fill(ref, value)` | set value with native setter + input/change events |
+| `select(ref, value)` | select option by label or value |
+| `scroll(ref? or dx/dy)` | scroll element into view or page by deltas |
+| `upload(ref, paths)` | set files on a file input via CDP |
+| `list_network` / `get_network_body(id)` | captured requests and response bodies |
+| `list_dialogs` / `handle_dialog` | pending/recent JS dialogs; per-tab accept/dismiss policy |
+| `screenshot(tabId?, annotate?)` | PNG (base64); `annotate` overlays `[N]` badges on snapshot refs |
 | `wait_for(text, timeout?)` | poll page text until it appears |
+| `wait_download(timeout_ms?)` | wait for a download; returns saved path, bytes, mime and sha256 |
 
 ## Notes
 

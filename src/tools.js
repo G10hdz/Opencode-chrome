@@ -145,6 +145,12 @@ export const TOOLS = [
     schema: { tabId, annotate: z.boolean().optional() },
   },
   {
+    name: "wait_download",
+    description:
+      "Wait for a browser download to finish (timeout_ms, default 30000). Returns the saved path, bytes, mime, source url and a sha256 of the file computed by the bridge. Downloads are global to the browser (not per-tab) and land in the user's normal download directory. Requires an attached tab.",
+    schema: { timeout_ms: z.number().int().positive().optional(), tabId },
+  },
+  {
     name: "wait_for",
     description:
       "Poll the page innerText until the given text appears or timeout (ms) elapses.",

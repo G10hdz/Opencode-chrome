@@ -1253,6 +1253,58 @@ async function toolWaitFor(args) {
   return { found: true };
 }
 
+// Los items de chrome.downloads no llevan tabId: el tab solo actúa de gate de
+// sesión attached. Polling con search (sin listeners) sobrevive al restart del
+// service worker y evita estado in-flight.
+async function toolWaitDownload(args = {}) {
+  await resolveTabId(args);
+  const timeout = typeof args.timeout_ms === "number" ? args.timeout_ms : 30000;
+  const deadline = Date.now() + timeout;
+  // un download puede arrancar un instante antes de que la tool corra (click -> bridge -> SW)
+  const grace = new Date(Date.now() - 3000).toISOString();
+  let watchId = null;
+  while (true) {
+    if (watchId == null) {
+      const recent = await chrome.downloads.search({
+        startedAfter: grace, orderBy: ["-startTime"], limit: 20,
+      });
+      const cand = recent.find((d) => d.state === "in_progress")
+        ?? recent.find((d) => d.state === "complete" || d.state === "interrupted");
+      if (!cand) {
+        if (Date.now() >= deadline) break;
+        await sleep(200);
+        continue;
+      }
+      watchId = cand.id;
+    }
+    const [item] = await chrome.downloads.search({ id: watchId });
+    if (!item) break;
+    if (item.state === "interrupted")
+      fail(
+        "download_interrupted",
+        "check the browser's downloads page for the failure reason",
+        `wait_download: descarga interrumpida (${item.error ?? "unknown"})`
+      );
+    if (item.state === "complete")
+      return {
+        id: item.id,
+        path: item.filename,
+        filename: item.filename.split(/[\\/]/).pop(),
+        bytes: item.fileSize,
+        mime: item.mime,
+        url: item.finalUrl || item.url,
+        exists: item.exists,
+      };
+    if (Date.now() >= deadline) break;
+    await sleep(200);
+  }
+  fail(
+    "wait_timeout",
+    "no download started or finished before the timeout; verify the click actually triggers a download",
+    `wait_download: sin descarga en ${timeout}ms`
+  );
+}
+
 // Árbol de frames del tab: los OOPIFs (cross-origin, sesión hija del auto-attach)
 // reportan su sessionId y si su origen está en la allowlist del origen attached.
 // Sirve para descubrir qué pasarle a `frame` en snapshot/find/read_text.
@@ -1307,6 +1359,7 @@ const TOOLS = {
   get_network_body: toolGetNetworkBody,
   screenshot: toolScreenshot,
   wait_for: toolWaitFor,
+  wait_download: toolWaitDownload,
 };
 
 async function handle(tool, args) {

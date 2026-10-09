@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -221,6 +221,13 @@ process.stdin.once("end", () => {
 registerTools(server, async (tool, args) => {
   try {
     const result = await callExtension(tool, args);
+    if (tool === "wait_download" && result && typeof result.path === "string") {
+      try {
+        result.sha256 = createHash("sha256").update(readFileSync(result.path)).digest("hex");
+      } catch {
+        result.sha256 = null; // file moved or locked: report the path anyway
+      }
+    }
     if (result && typeof result === "object" && typeof result.image === "string") {
       return { content: [{ type: "image", data: result.image, mimeType: "image/png" }] };
     }
