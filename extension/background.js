@@ -1513,6 +1513,33 @@ function keyDef(tok, modifiers) {
   return null;
 }
 
+// press_key no pasa por resolveRef: las teclas con texto caen en el
+// activeElement, así que el gate de campos sensibles se repite aquí sobre el
+// foco real. isSensitive es copia idéntica de SNAPSHOT_SCRIPT/REF_CHECK_SCRIPT
+// (tercer sitio — invariante AGENTS.md). "iframe" = el foco está dentro de un
+// OOPIF y hay que mirar la sesión del frame; ahí sí se exige hasFocus() porque
+// un frame no enfocado conserva un activeElement viejo.
+function FOCUS_SENSITIVE_EXPR(requireFocus) {
+  return `(() => {
+    const isSensitive = (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag !== "input" && tag !== "textarea") return false;
+      if ((el.type || "").toLowerCase() === "password") return "password";
+      if ((el.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) return "cc";
+      const probe = [
+        el.name, el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder"),
+        el.labels && el.labels[0] ? el.labels[0].innerText : "",
+      ].join(" ").toLowerCase().replace(/[-_]/g, " ");
+      return /\\b(cvv|cvc|csc|ssn|social security|security code|card verification|tax id)\\b/.test(probe) ? "credential" : false;
+    };
+    ${requireFocus ? "if (!document.hasFocus()) return false;" : ""}
+    const el = document.activeElement;
+    if (!el) return false;
+    const s = isSensitive(el);
+    return s || (el.tagName === "IFRAME" ? "iframe" : false);
+  })()`;
+}
+
 async function toolPressKey(args) {
   requireArg(args, "key");
   const tabId = await resolveTabId(args);
@@ -1537,7 +1564,27 @@ async function toolPressKey(args) {
     );
   const base = { modifiers, key: def.key, code: def.code, windowsVirtualKeyCode: def.vk, nativeVirtualKeyCode: def.vk };
   const isCommand = modifiers & (1 | 2 | 4); // Alt/Control/Meta: comando, no texto
-  if (def.text && !isCommand) base.text = def.text;
+  if (def.text && !isCommand) {
+    base.text = def.text;
+    // gate takeover: Tab+keystrokes llenaría un password sin pasar por resolveRef
+    let hit = await evaluate(tabId, FOCUS_SENSITIVE_EXPR(false));
+    if (hit === "iframe") {
+      hit = false;
+      for (const [sessionId] of frameStore(tabId)) {
+        const inner = await evaluate(tabId, FOCUS_SENSITIVE_EXPR(true), sessionId).catch(() => false);
+        if (inner && inner !== "iframe") {
+          hit = inner;
+          break;
+        }
+      }
+    }
+    if (hit)
+      fail(
+        "human_takeover_required",
+        "the field must be completed by the user; ask them to fill it in the page and confirm, then continue the task",
+        `press_key: focused element is a sensitive field (${hit}); agent input is blocked`
+      );
+  }
   await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyDown" });
   await cdp(tabId, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
   return withSnapshot(tabId, undefined, args, { pressed: args.key });
