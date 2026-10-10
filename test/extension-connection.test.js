@@ -659,6 +659,53 @@ test('press_key sends keyDown/keyUp with modifier bits and validates input', asy
   assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
 });
 
+test('press_key refuses text keys while a sensitive field has focus', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  const keyCalls = () =>
+    w.chrome.debugger.sentCommands.filter((c) => c.method === 'Input.dispatchKeyEvent');
+  // foco en un password: las teclas con texto no deben despacharse (bypass del
+  // takeover gate — Tab+keystrokes llenaría el campo sin pasar por resolveRef)
+  w.chrome.debugger.responses['Runtime.evaluate'] = { result: { value: 'password' } };
+  w.sockets[0].receive({ id: 1, tool: 'press_key', args: { tabId: 7, key: 'x' } });
+  await setImmediate();
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[0].error?.error_code, 'human_takeover_required');
+  assert.equal(keyCalls().length, 0);
+  // Tab no produce texto: la navegación por teclado sigue libre
+  w.sockets[0].receive({ id: 2, tool: 'press_key', args: { tabId: 7, key: 'Tab' } });
+  await setImmediate();
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[1].result?.pressed, 'Tab');
+  assert.equal(keyCalls().length, 2);
+  // foco dentro de un OOPIF: se revisa el activeElement del frame con foco
+  runInNewContext(
+    "frameSessions.set(7, new Map([['sess1', { targetId: 'f1', url: 'https://pay.example.com/' }]]))",
+    w.ctx
+  );
+  const realSend = w.chrome.debugger.sendCommand;
+  w.chrome.debugger.sendCommand = (t, m, p, cb) => {
+    if (m === 'Runtime.evaluate') {
+      w.chrome.debugger.sentCommands.push({ target: t, method: m, params: p });
+      cb?.({ result: { value: t.sessionId ? 'cc' : 'iframe' } });
+      return;
+    }
+    realSend(t, m, p, cb);
+  };
+  w.sockets[0].receive({ id: 3, tool: 'press_key', args: { tabId: 7, key: '4' } });
+  await setImmediate();
+  await setImmediate();
+  await setImmediate();
+  assert.equal(w.sockets[0].sent[2].error?.error_code, 'human_takeover_required');
+  assert.equal(keyCalls().length, 2);
+});
+
 test('include_snapshot returns a fresh tree and replaces the ref store', async () => {
   const w = await worker();
   w.sockets[0].open();
