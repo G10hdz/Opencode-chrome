@@ -541,6 +541,37 @@ test('two sessions list only the tabs attached to their own port', async () => {
   assert.equal(denied.error.error_code, 'tab_not_attached');
 });
 
+test('an extra lane reconnects after the base port has dropped', async () => {
+  const w = await worker({ token: 'test-token', sessions: 2, port: 19223 });
+  const [base, extra] = w.sockets;
+  base.open();
+  extra.open();
+  base.close();
+  w.listeners.alarm({ name: 'reconnect' });
+  await setImmediate();
+  await setImmediate();
+  extra.close();
+  await w.fire(3000);
+  const live = w.sockets.filter((s) => /:19224\//.test(s.url) && s.readyState !== 3);
+  assert.equal(live.length, 1);
+});
+
+test('the alarm brings back a down lane while the base port stays up', async () => {
+  const w = await worker({ token: 'test-token', sessions: 2, port: 19223 });
+  const [base, extra] = w.sockets;
+  base.open();
+  extra.open();
+  extra.close();
+  for (const [id, timer] of [...w.timers]) {
+    if (timer.ms === 3000) w.timers.delete(id);
+  }
+  w.listeners.alarm({ name: 'reconnect' });
+  await setImmediate();
+  await setImmediate();
+  const live = w.sockets.filter((s) => /:19224\//.test(s.url) && s.readyState !== 3);
+  assert.equal(live.length, 1);
+});
+
 test('events from a retired socket do not close the current connection', async () => {
   const w = await worker();
   const old = w.sockets[0];
