@@ -780,7 +780,7 @@ test('navigate action drives history and reload via CDP', async () => {
   assert.equal(w.sockets[0].sent[4].error.error_code, 'no_history');
 });
 
-test('navigate init_script registers an on-new-document script via CDP', async () => {
+test('navigate does not honor init_script from the model (eval lives in adapters)', async () => {
   const w = await worker();
   w.sockets[0].open();
   w.chrome.storage.session.get = async () => ({
@@ -795,12 +795,34 @@ test('navigate init_script registers an on-new-document script via CDP', async (
   await w.fire(200);
   await flush();
   const init = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument');
-  assert.equal(init.params.source, 'window.__auth=1');
+  assert.equal(init, undefined);
+});
 
-  // init_script no-string -> invalid_argument
-  w.sockets[0].receive({ id: 2, tool: 'navigate', args: { tabId: 7, url: 'https://app.example.com/', init_script: 5 } });
-  await flush();
-  assert.equal(w.sockets[0].sent[1].error.error_code, 'invalid_argument');
+test('run_recipe init_script registers the script and removes it after the run', async () => {
+  const w = await worker();
+  w.sockets[0].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } },
+  });
+  w.chrome.tabs.get = async () => ({ id: 7, url: 'https://app.example.com/' });
+  w.ctx.toolNavigate = async () => ({ url: 'ok' });
+  w.chrome.debugger.responses['Page.addScriptToEvaluateOnNewDocument'] = { identifier: 's1' };
+  const recipe = {
+    name: 'auth', origin: 'https://app.example.com',
+    steps: [
+      { init_script: 'window.__u = {{u}}' },
+      { navigate: 'https://app.example.com/' },
+    ],
+  };
+  w.sockets[0].receive({ id: 1, tool: 'run_recipe', args: { tabId: 7, recipe, params: { u: 'a"b' } } });
+  await setImmediate();
+  await setImmediate();
+  await setImmediate();
+  const add = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument');
+  // params interpolados como literales JSON, igual que en eval
+  assert.equal(add?.params?.source, 'window.__u = "a\\"b"');
+  const rm = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument');
+  assert.equal(rm?.params?.identifier, 's1');
 });
 
 test('list_network filters by resource type, paginates and redacts headers', async () => {
