@@ -888,7 +888,7 @@ async function toolNavigate(args) {
     // handle_before_unload: al estar attached, un beforeunload entra por
     // javascriptDialogOpening y la política del tab (default accept) lo responde
     if (action === "reload") {
-      await cdp(tabId, "Page.reload", { ignoreCache: true });
+      await cdp(tabId, "Page.reload", { ignoreCache: bypass });
     } else if (action) {
       const hist = await cdp(tabId, "Page.getNavigationHistory");
       const entry = hist.entries?.[hist.currentIndex + (action === "back" ? -1 : 1)];
