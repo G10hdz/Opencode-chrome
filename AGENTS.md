@@ -65,8 +65,13 @@ is JSON-stringified into text.
 - Connections are rejected unless the `token` query param matches the shared
   token, and unless the `Origin` (when present) is `chrome-extension://`.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
-  element before click/type and forces a fresh snapshot if it changed. Keep
-  `nameOf` identical between `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
+  element before click/type and reports a `match_level`: `exact` (selector
+  and fingerprint intact), `reidentified` (selector dead or pointing at a
+  different element, but tag+name match is unique — that candidate wins over
+  a drifted selector, by design), `stable` (selector resolves but the
+  fingerprint drifted — the action proceeds and reports the drift), or
+  `stale_ref` when nothing matches. Keep `nameOf` identical between
+  `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
 - Page tools resolve through `resolveTabId`, which accepts only a user-attached
   tab whose current origin matches its session attachment — exact match, or an
   origin in the `origin_allowlist` the bridge pushes from

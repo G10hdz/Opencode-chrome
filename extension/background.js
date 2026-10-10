@@ -801,7 +801,10 @@ function REF_CHECK_SCRIPT(sel, fp) {
     const fpOf = (el) => el.tagName.toLowerCase() + "|" + nameOf(el);
     const el = document.querySelector(SEL);
     if (el && fpOf(el) === FP.t + "|" + FP.n) return { found: true, level: "exact", sel: SEL, sensitive: isSensitive(el) };
-    // re-identificar: tag+name único entre los interactivos visibles; role y classHash desempatan
+    // re-identificar: tag+name único entre los interactivos visibles; role y
+    // classHash desempatan. Se evalúa aunque el selector siga resolviendo: si
+    // ese elemento ya no es el de la foto, el que conserva la identidad
+    // tag+name es mejor target que el impostor que ocupa su selector.
     let cands = Array.prototype.filter.call(document.querySelectorAll(INTERACTIVE), (e) =>
       visible(e) && e.tagName.toLowerCase() === FP.t && nameOf(e) === FP.n
     );
