@@ -767,17 +767,27 @@ test('navigate action drives history and reload via CDP', async () => {
   const cache = w.chrome.debugger.sentCommands.filter((c) => c.method === 'Network.setCacheDisabled');
   assert.deepEqual(cache.map((c) => c.params.cacheDisabled).join('|'), 'true|false');
 
+  // reload sin ignore_cache: no debe bypassar el HTTP cache ni tocarlo global
+  w.chrome.debugger.sentCommands.length = 0;
+  w.sockets[0].receive({ id: 6, tool: 'navigate', args: { tabId: 7, action: 'reload' } });
+  await flush();
+  await w.fire(200);
+  await flush();
+  const plainReload = w.chrome.debugger.sentCommands.find((c) => c.method === 'Page.reload');
+  assert.equal(plainReload.params.ignoreCache, false);
+  assert.equal(w.chrome.debugger.sentCommands.filter((c) => c.method === 'Network.setCacheDisabled').length, 0);
+
   // validaciones: url+action juntos, action desconocida, sin historial
   w.sockets[0].receive({ id: 3, tool: 'navigate', args: { tabId: 7, url: 'https://x/', action: 'back' } });
   await flush();
-  assert.equal(w.sockets[0].sent[2].error.error_code, 'invalid_argument');
+  assert.equal(w.sockets[0].sent[3].error.error_code, 'invalid_argument');
   w.sockets[0].receive({ id: 4, tool: 'navigate', args: { tabId: 7, action: 'sideways' } });
   await flush();
-  assert.equal(w.sockets[0].sent[3].error.error_code, 'invalid_argument');
+  assert.equal(w.sockets[0].sent[4].error.error_code, 'invalid_argument');
   w.chrome.debugger.responses['Page.getNavigationHistory'] = { currentIndex: 0, entries: [{ id: 10 }] };
   w.sockets[0].receive({ id: 5, tool: 'navigate', args: { tabId: 7, action: 'back' } });
   await flush();
-  assert.equal(w.sockets[0].sent[4].error.error_code, 'no_history');
+  assert.equal(w.sockets[0].sent[5].error.error_code, 'no_history');
 });
 
 test('navigate init_script registers an on-new-document script via CDP', async () => {
