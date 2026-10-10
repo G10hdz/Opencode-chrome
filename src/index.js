@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import { registerTools, outputToFile } from "./tools.js";
 import { spawnSync } from "node:child_process";
 
@@ -139,6 +139,13 @@ console.error(
 let socket = null;
 let nextId = 1;
 const pending = new Map();
+// otros procesos MCP (otro agente) que comparten este puente
+const peers = new Set();
+let peerMode = false;
+let peerSocket = null;
+const peerPending = new Map();
+let stdioClosed = false;
+let listenerReady = false;
 
 // Errors carried over the wire/MCP keep a machine-readable code + an actionable remedy.
 function toolError(errorCode, remedy, message) {
@@ -189,17 +196,198 @@ function rejectPending(message) {
   }
 }
 
+function mcpFailure(err) {
+  const error = {
+    message: err.message,
+    error_code: err.errorCode ?? "internal_error",
+    remedy: err.remedy ?? "retry the call; if it persists, report this message",
+  };
+  return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
+}
+
+// Un solo proceso escucha. El que llega después no abre otro puerto: manda
+// las tool calls al que ya tiene la extensión. role=peer no manda Origin;
+// un navegador siempre lo manda, y eso se rechaza para que una página no
+// dispare tools aunque adivine el token.
+function attachPeer(ws) {
+  peers.add(ws);
+  ws.on("message", (data) => {
+    let msg;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
+    const args = msg.args && typeof msg.args === "object" ? msg.args : {};
+    handleTool(msg.tool, args).then((result) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: msg.id, result }));
+    });
+  });
+  ws.on("close", () => {
+    peers.delete(ws);
+    if (stdioClosed && peers.size === 0) releaseListener();
+  });
+  ws.on("error", () => ws.terminate());
+}
+
+function startPeerMode() {
+  peerMode = true;
+  const url = `ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(TOKEN)}&role=peer`;
+  peerSocket = new WebSocket(url);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve();
+    };
+    peerSocket.once("open", () => {
+      // un puente viejo nos toma por la extensión y empuja {policy} al toque
+      setTimeout(() => finish(), 200);
+    });
+    peerSocket.once("error", (err) => {
+      console.error(
+        `opencode-chrome: cannot attach to the bridge on 127.0.0.1:${PORT} (${err.message ?? err})`
+      );
+      finish(err);
+    });
+    peerSocket.on("message", (data) => {
+      let msg;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (!settled && msg && Object.prototype.hasOwnProperty.call(msg, "policy")) {
+        console.error(
+          `opencode-chrome: the bridge on 127.0.0.1:${PORT} is an older process and cannot take another client. Restart it and retry.`
+        );
+        try {
+          peerSocket.close();
+        } catch {}
+        finish(new Error("old bridge"));
+        return;
+      }
+      const entry = peerPending.get(msg?.id);
+      if (!entry) return;
+      peerPending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.error) {
+        const err = new Error(msg.error.message ?? JSON.stringify(msg.error));
+        if (msg.error.error_code) err.errorCode = msg.error.error_code;
+        if (msg.error.remedy) err.remedy = msg.error.remedy;
+        entry.reject(err);
+      } else {
+        entry.resolve(msg.result);
+      }
+    });
+    peerSocket.on("close", () => {
+      for (const [id, entry] of peerPending) {
+        clearTimeout(entry.timer);
+        entry.reject(
+          toolError(
+            "extension_disconnected",
+            "retry once the bridge is back",
+            "the bridge closed the attached client"
+          )
+        );
+        peerPending.delete(id);
+      }
+    });
+  });
+}
+
+function callPeer(tool, args) {
+  return new Promise((resolve, reject) => {
+    const deliver = () => {
+      if (!peerSocket || peerSocket.readyState !== WebSocket.OPEN) {
+        reject(
+          toolError(
+            "bridge_busy",
+            "restart the bridge that holds the port, then retry",
+            `cannot attach to the bridge on 127.0.0.1:${PORT}`
+          )
+        );
+        return;
+      }
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        peerPending.delete(id);
+        reject(
+          toolError(
+            "extension_timeout",
+            "retry the call; if it keeps timing out the extension service worker may be stuck, reload it on chrome://extensions",
+            `attached bridge did not respond to "${tool}" within ${TIMEOUT_MS}ms`
+          )
+        );
+      }, TIMEOUT_MS);
+      peerPending.set(id, { resolve, reject, timer });
+      peerSocket.send(JSON.stringify({ id, tool, args: args ?? {} }));
+    };
+    if (peerSocket?.readyState === WebSocket.OPEN) deliver();
+    else if (peerSocket) peerSocket.once("open", deliver);
+    else
+      reject(
+        toolError(
+          "bridge_busy",
+          "restart the bridge that holds the port, then retry",
+          `cannot attach to the bridge on 127.0.0.1:${PORT}`
+        )
+      );
+  }).then(
+    (result) => result,
+    (err) => mcpFailure(err)
+  );
+}
+
 const wss = new WebSocketServer({ host: "127.0.0.1", port: PORT });
+
+const bound = new Promise((resolve) => {
+  wss.once("listening", () => {
+    listenerReady = true;
+    resolve();
+  });
+  wss.on("error", (err) => {
+    if (!listenerReady && err.code === "EADDRINUSE") {
+      console.error(
+        `opencode-chrome: 127.0.0.1:${PORT} already has a bridge, attaching as another client`
+      );
+      startPeerMode().then(resolve, () => process.exit(1));
+      return;
+    }
+    console.error(
+      `opencode-chrome: cannot listen on 127.0.0.1:${PORT} (${err.code ?? err.message})`
+    );
+    process.exit(1);
+  });
+});
 
 wss.on("connection", (ws, req) => {
   const origin = req.headers.origin;
-  if (origin && !origin.startsWith("chrome-extension://")) {
-    ws.close(1008, "origin not allowed");
+  let url;
+  try {
+    url = new URL(req.url ?? "/", "http://127.0.0.1");
+  } catch {
+    ws.close(1008, "bad url");
     return;
   }
-  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
+  const token = url.searchParams.get("token");
   if (token !== TOKEN) {
     ws.close(1008, "invalid token");
+    return;
+  }
+  if (url.searchParams.get("role") === "peer") {
+    if (origin) {
+      ws.close(1008, "origin not allowed");
+      return;
+    }
+    attachPeer(ws);
+    return;
+  }
+  if (origin && !origin.startsWith("chrome-extension://")) {
+    ws.close(1008, "origin not allowed");
     return;
   }
   if (socket) {
@@ -244,24 +432,39 @@ wss.on("connection", (ws, req) => {
   ws.on("error", () => ws.terminate());
 });
 
-wss.on("error", (err) => {
-  console.error(
-    `opencode-chrome: cannot listen on 127.0.0.1:${PORT} (${err.code ?? err.message})`
-  );
-  process.exit(1);
-});
-
 const server = new McpServer({ name: "opencode-chrome", version: "0.1.1" });
 
-// The WebSocket listener must not outlive its stdio client and keep the port busy.
-process.stdin.once("end", () => {
+function releaseListener() {
   rejectPending("MCP client disconnected.");
   for (const client of wss.clients) client.terminate();
   wss.close();
   server.close().catch(() => {});
+}
+
+// Sin peers, el listener no sobrevive al cliente stdio: suelta el puerto.
+// Con peers, el primer cliente puede irse y los otros siguen usando la extensión.
+process.stdin.once("end", () => {
+  stdioClosed = true;
+  if (peerMode) {
+    for (const entry of peerPending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(
+        toolError("extension_disconnected", "retry once the bridge is back", "MCP client disconnected.")
+      );
+    }
+    peerPending.clear();
+    try {
+      peerSocket?.terminate();
+    } catch {}
+    wss.close();
+    server.close().catch(() => {});
+    return;
+  }
+  if (peers.size === 0) releaseListener();
+  else rejectPending("MCP client disconnected.");
 });
 
-registerTools(server, async (tool, args) => {
+async function handleTool(tool, args) {
   try {
     if (tool === "list_recipes")
       return { content: [{ type: "text", text: JSON.stringify({ recipes: listRecipes() }) }] };
@@ -311,6 +514,8 @@ registerTools(server, async (tool, args) => {
     };
     return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
   }
-});
+}
 
+await bound;
+registerTools(server, (tool, args) => (peerMode ? callPeer(tool, args) : handleTool(tool, args)));
 await server.connect(new StdioServerTransport());

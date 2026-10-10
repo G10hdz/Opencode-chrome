@@ -8,8 +8,9 @@ Guidance for AI coding agents working in this repository. Humans: see
 Two halves that talk over a localhost WebSocket:
 
 - **Bridge** (`src/`) — a Node MCP server (stdio) that also runs a WebSocket
-  server on `127.0.0.1:19223`. opencode calls MCP tools; the bridge forwards
-  each call to the extension and returns the reply.
+  server on `127.0.0.1:19223`. Any MCP client calls the tools; the bridge
+  forwards each call to the extension and returns the reply. A second client
+  that finds the port busy attaches to the bridge already running.
 - **Extension** (`extension/`) — an MV3 service worker that connects to the
   bridge as a WebSocket client and drives only user-attached tabs through
   `chrome.debugger` (Chrome DevTools Protocol). Attachments are session-scoped
@@ -64,6 +65,9 @@ is JSON-stringified into text.
 - The WebSocket server binds to `127.0.0.1` only.
 - Connections are rejected unless the `token` query param matches the shared
   token, and unless the `Origin` (when present) is `chrome-extension://`.
+  A second local MCP process attaches with `role=peer` and no Origin. That
+  socket can submit tool calls; it never replaces the extension connection.
+  A peer that sends an Origin is rejected.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and reports a `match_level`: `exact` (selector
   and fingerprint intact), `reidentified` (selector dead or pointing at a
