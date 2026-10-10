@@ -350,6 +350,29 @@ test('a policy message extends the attachment to allowlisted origins', async () 
   await assert.rejects(w.ctx.resolveTabId({ tabId: 7 }), (e) => e.errorCode === 'tab_not_attached');
 });
 
+test('cross-origin navigation keeps the attachment when the target is allowlisted', async () => {
+  const w = await worker();
+  const stored = { attachments: { 7: { origin: 'https://app.example.com', attachedAt: 1 } } };
+  w.chrome.storage.session.get = async () => JSON.parse(JSON.stringify(stored));
+  w.chrome.storage.session.set = async (v) => {
+    stored.attachments = v.attachments;
+  };
+  runInNewContext(
+    "originAllowlist = { 'https://app.example.com': ['https://sso.example.com'] }",
+    w.ctx
+  );
+  // el caso de uso de la allowlist: redirect SSO. El attachment debe sobrevivir.
+  w.listeners.updated(7, { url: 'https://sso.example.com/login' });
+  await setImmediate();
+  await setImmediate();
+  assert.ok(stored.attachments['7'], 'allowlisted nav dropped the attachment');
+  // fuera de la allowlist sigue detacheando
+  w.listeners.updated(7, { url: 'https://evil.example.com/' });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(stored.attachments['7'], undefined);
+});
+
 test('resolveFrameSession gates OOPIF access on the attachment allowlist', async () => {
   const w = await worker();
   w.chrome.storage.session.get = async () => ({
