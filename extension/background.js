@@ -2107,11 +2107,18 @@ async function toolResizePage(args) {
   return { width: args.width, height: args.height };
 }
 
-// Los items de chrome.downloads no llevan tabId: el tab solo actúa de gate de
-// sesión attached. Polling con search (sin listeners) sobrevive al restart del
-// service worker y evita estado in-flight.
+// Los items de chrome.downloads no llevan tabId. Con una sesión el tab solo
+// abre la puerta. Con varias, devolver el archivo cruzaría sesiones, y no hay
+// forma de saber cuál lo empezó. Polling con search (sin listeners) sobrevive
+// al restart del service worker.
 async function toolWaitDownload(args = {}) {
   await resolveTabId(args);
+  if (sessionCount > 1)
+    fail(
+      "downloads_not_isolated",
+      "downloads are shared by the browser and cannot be tied to a session. Turn Sesiones off, or read the file another way",
+      "wait_download: several sessions are on, so this tool would see every download"
+    );
   const timeout = typeof args.timeout_ms === "number" ? args.timeout_ms : 30000;
   const deadline = Date.now() + timeout;
   // un download puede arrancar un instante antes de que la tool corra (click -> bridge -> SW)

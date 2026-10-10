@@ -226,7 +226,7 @@ export const TOOLS = [
   {
     name: "wait_download",
     description:
-      "Wait for a browser download to finish (timeout_ms, default 30000). Returns the saved path, bytes, mime, source url and a sha256 of the file computed by the bridge. Downloads are global to the browser (not per-tab) and land in the user's normal download directory. Requires an attached tab.",
+      "Wait for a browser download to finish (timeout_ms, default 30000). Returns the saved path, bytes, mime, source url and a sha256 of the file computed by the bridge. Downloads are global to the browser (not per-tab) and land in the user's normal download directory. Requires an attached tab. With several sessions on, fails with downloads_not_isolated instead of returning another session's file.",
     schema: { timeout_ms: z.number().int().positive().optional(), tabId },
   },
   {
