@@ -76,7 +76,10 @@ is JSON-stringified into text.
   Above 1, a new process binds the next free `127.0.0.1` port in that range
   and does not attach as a peer. It never binds past the cap. Each port's
   extension socket only resolves tabs attached to that port. A tab belongs
-  to one port.
+  to one port. `wait_download` reads `chrome.downloads`, which has no tab.
+  Above one session it fails with `downloads_not_isolated` instead of
+  returning a file from another session. One session still returns the
+  latest download.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and reports a `match_level`: `exact` (selector
   and fingerprint intact), `reidentified` (selector dead or pointing at a
