@@ -107,7 +107,9 @@ same rule as SSO redirects and OOPIF frames.
 }
 ```
 
-Steps: `navigate`, `wait_for` (+ optional `timeout`), `eval`, `columns`.
+Steps: `navigate`, `wait_for` (+ optional `timeout`), `init_script`, `eval`,
+`columns`. `init_script` registers JS on new documents for the duration of the
+recipe only (auth/session setup), then it is removed.
 `{{key}}` placeholders come from `params`; inside `eval` each placeholder is
 substituted as a JSON-encoded literal (write `search({{q}})`, no quotes) so a
 param value can never break out of the script's context. The `eval` JS lives
@@ -122,7 +124,7 @@ only in files you install — there is no free-form eval tool. See
 | `list_tabs` | attached tabs with id, title, url |
 | `new_tab(url?, background?)` | open a tab (active unless `background:true`) |
 | `close_tab(id)` / `activate_tab(id)` | tab management |
-| `navigate(url?, action?, ignore_cache?, init_script?, handle_before_unload?, tabId?)` | go to a URL or `action` back/forward/reload; waits for load; `init_script` runs on new documents, `handle_before_unload` auto-answers that dialog |
+| `navigate(url?, action?, ignore_cache?, handle_before_unload?, tabId?)` | go to a URL or `action` back/forward/reload; waits for load; `handle_before_unload` auto-answers that dialog |
 | `snapshot(tabId?)` | accessibility-style text tree with `[ref]` per interactive element; `selector`, `interactive_only`, `in_viewport_only`, `max_chars`, `frame` scope it; sensitive fields are redacted |
 | `find(text?, role?, selector?, frame?)` | matching `[ref]` lines only |
 | `read_text(selector?, max?, scroll?, frame?)` | element innerText, hydrates lazy sections |

@@ -34,12 +34,11 @@ export const TOOLS = [
   {
     name: "navigate",
     description:
-      "Navigate the tab and wait for the load to finish. Pass exactly one of: url (go to URL), or action back/forward/reload (history navigation via Page.navigateToHistoryEntry / Page.reload). ignore_cache:true bypasses the HTTP cache during the navigation. init_script registers JS to run on new documents (auth/session setup) while the debugger session lives. handle_before_unload:true attaches so a beforeunload dialog is answered per the tab's dialog policy (default accept) instead of blocking. If the landing origin is outside the attachment's reach the tab detaches (origin_changed on the next call) and include_snapshot yields detached_after_nav instead of a tree. include_snapshot:true returns a fresh snapshot in the same response.",
+      "Navigate the tab and wait for the load to finish. Pass exactly one of: url (go to URL), or action back/forward/reload (history navigation via Page.navigateToHistoryEntry / Page.reload). ignore_cache:true bypasses the HTTP cache during the navigation. handle_before_unload:true attaches so a beforeunload dialog is answered per the tab's dialog policy (default accept) instead of blocking. If the landing origin is outside the attachment's reach the tab detaches (origin_changed on the next call) and include_snapshot yields detached_after_nav instead of a tree. include_snapshot:true returns a fresh snapshot in the same response.",
     schema: {
       url: z.string().optional(),
       action: z.enum(["back", "forward", "reload"]).optional(),
       ignore_cache: z.boolean().optional(),
-      init_script: z.string().optional(),
       handle_before_unload: z.boolean().optional(),
       tabId,
       include_snapshot: includeSnapshot,
