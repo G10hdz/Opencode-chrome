@@ -87,8 +87,10 @@ is JSON-stringified into text.
 - Sensitive fields (password, `autocomplete=cc-*`, CVV/SSN-labeled inputs) are
   redacted in snapshots and any action on their ref fails with
   `human_takeover_required`; the gate lives in `resolveRef` so every
-  ref-targeted tool inherits it. Keep `isSensitive` identical between
-  `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
+  ref-targeted tool inherits it. `press_key` bypasses refs, so text-producing
+  keys are gated on `isSensitive(document.activeElement)` in the focused
+  document or frame instead. Keep `isSensitive` identical across
+  `SNAPSHOT_SCRIPT`, `REF_CHECK_SCRIPT` and `FOCUS_SENSITIVE_EXPR`.
 
 If a change touches any of these, call it out explicitly in the PR.
 
