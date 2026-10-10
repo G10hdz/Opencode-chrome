@@ -64,17 +64,6 @@ shows `off` until the token is configured and the bridge is running.
 }
 ```
 
-The same command works for any MCP client. If the port is already taken by
-this bridge, the new process attaches to it and they share one extension
-and one token. Grok, in `~/.grok/config.toml`:
-
-```toml
-[mcp_servers.chrome]
-command = "node"
-args = ["/absolute/path/to/opencode-chrome/src/index.js"]
-enabled = true
-```
-
 **3. Pair the token:** the bridge generates a token at
 `~/.config/opencode-chrome/token` (or prints it to stderr and copies it to
 your clipboard at startup; set `OPENCODE_CHROME_TOKEN` to use your own).
@@ -95,6 +84,8 @@ list the extra origins in `~/.config/opencode-chrome/policy.json`:
 The bridge pushes the allowlist to the extension on connect (env override:
 `OPENCODE_CHROME_POLICY`). Entries apply per attached origin and are not
 symmetric; with no file the policy is strict exact-origin.
+
+The same command works from another local MCP client. How many sessions run at once is set in the extension options, under Sesiones. It stays at one unless you change it.
 
 ## Site adapters
 
@@ -174,14 +165,17 @@ only in files you install — there is no free-form eval tool. See
   expected with CDP; the extension auto-detaches after 30s idle.
 - Env vars for the bridge: `OPENCODE_CHROME_PORT` (default 19223; the extension
   follows it via the port field on the options page),
-  `OPENCODE_CHROME_TIMEOUT_MS` (default 30000).
+  `OPENCODE_CHROME_TIMEOUT_MS` (default 30000),
+  `OPENCODE_CHROME_SESSION` (optional name for that terminal, shown only when
+  more than one session is connected).
 - Security: the WebSocket binds to 127.0.0.1 only, rejects non-extension
   origins, and requires the shared bridge/extension token. The only data
-  stored persistently is that token and the optional port override (in
-  `chrome.storage.local`). Attached tab
-  origins live only in `chrome.storage.session`. Page content never leaves
-  your machine through this bridge; it goes only to your model provider,
-  exactly like any opencode prompt.
+  stored persistently is that token, the optional port override, and the
+  session cap (in `chrome.storage.local`, and in
+  `~/.config/opencode-chrome/config.json` once the extension has connected).
+  Attached tab origins live only in `chrome.storage.session`. Page content
+  never leaves your machine through this bridge; it goes only to your model
+  provider, exactly like any opencode prompt.
 
 ## Troubleshooting
 
@@ -191,11 +185,12 @@ only in files you install — there is no free-form eval tool. See
   matches. The options page shows the connection status live.
 - **A tool returns "Chrome extension not connected":** same causes as
   above; the bridge is up but no extension has paired.
-- **`cannot listen on 127.0.0.1:19223` or `cannot attach`:** something that
-  is not this bridge holds the port. Close it, or set `OPENCODE_CHROME_PORT`
-  and enter the same port in the extension's options page. A second copy of
-  this bridge does not need its own port: it attaches to the one already running.
-  If stderr says the bridge is an older process, restart that process.
+- **`cannot listen`, `cannot attach`, or `no free port`:** something that is
+  not this bridge holds the port, or every port in the session range is taken.
+  With Sessions left at one, a second copy attaches to the bridge already
+  running. If stderr says the bridge is an older process, restart that process.
+  If it says there is no free port, close one session or raise the cap under
+  Sesiones in the extension options.
 - **Connection drops after sleep or a restart:** the extension retries every
   three seconds while awake and uses a Chrome alarm to recover after suspension.
   A connection that receives no messages for 45 seconds is replaced. If a tool
@@ -282,10 +277,6 @@ backend, sin cuentas, sin analítica.
    ```json
    { "mcp": { "chrome": { "type": "local", "command": ["npx", "-y", "opencode-chrome"] } } }
    ```
-   El mismo comando sirve para cualquier cliente MCP. Si el puerto ya lo
-   tiene este puente, el proceso nuevo se engancha y comparten la extensión
-   y el token. En Grok (`~/.grok/config.toml`): `command = "node"` y
-   `args` con la ruta absoluta a `src/index.js`.
 3. **Token**: el puente genera uno en `~/.config/opencode-chrome/token` (o lo
    imprime por stderr y lo copia a tu portapapeles al arrancar;
    `OPENCODE_CHROME_TOKEN` para usar el tuyo). Pegalo en la página de
@@ -294,6 +285,8 @@ backend, sin cuentas, sin analítica.
    conexiones se rechazan.
 4. Reinicia opencode, abre la página, haz clic en el ícono de la extensión para
    adjuntar esa pestaña y luego pídele cosas.
+
+El mismo comando sirve para otro cliente MCP local. Cuántas sesiones corren a la vez se define en las opciones de la extensión, en Sesiones. Queda en una hasta que lo cambies.
 
 Herramientas, notas de seguridad, solución de problemas y desarrollo: ver
 sección en inglés arriba (mismo contenido). Para contribuir:

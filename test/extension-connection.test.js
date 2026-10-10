@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import { TOOLS as BRIDGE_TOOLS } from '../src/tools.js';
 import * as policy from '../extension/policy.js';
+import * as sessions from '../extension/session-config.js';
 
 const source = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
 
@@ -41,7 +42,13 @@ async function worker(localStore = { token: 'test-token' }) {
       session: { get: async () => ({}) },
     },
     tabs: { query: async () => [], onRemoved: event('removed'), onUpdated: event('updated') },
-    action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, onClicked: event('clicked') },
+    action: {
+      setBadgeText: async () => {},
+      setBadgeBackgroundColor: async () => {},
+      onClicked: event('clicked'),
+      popups: [],
+      setPopup(opts) { chrome.action.popups.push(opts); },
+    },
     runtime: { onMessage: event('message'), onInstalled: event('installed'), onStartup: event('startup'), getManifest: () => ({ version: '0.0.0-test' }) },
     alarms: { create() {}, onAlarm: event('alarm') },
     debugger: {
@@ -55,11 +62,11 @@ async function worker(localStore = { token: 'test-token' }) {
     downloads: { search: async () => [] },
   };
   const ctx = {
-    ...policy, chrome, WebSocket: Socket,
+    ...policy, ...sessions, chrome, WebSocket: Socket,
     setTimeout(fn, ms) { timers.set(++nextTimer, { fn, ms }); return nextTimer; },
     clearTimeout(id) { timers.delete(id); },
   };
-  runInNewContext(source.replace(/^import .*;\n/, ''), ctx);
+  runInNewContext(source.replace(/^(?:import .*;\r?\n)+/, ''), ctx);
   await setImmediate();
   return {
     sockets, chrome, listeners, timers, ctx,
@@ -485,6 +492,53 @@ test('every tool the bridge exposes is registered in the extension TOOLS map', a
     .map((t) => t.name)
     .filter((name) => !registered.includes(name));
   assert.deepEqual(missing, []);
+});
+
+test('two sessions list only the tabs attached to their own port', async () => {
+  const w = await worker({ token: 'test-token', sessions: 2, port: 19223 });
+  assert.equal(w.sockets.length, 2);
+  assert.match(w.sockets[0].url, /:19223\//);
+  assert.match(w.sockets[1].url, /:19224\//);
+  w.chrome.storage.session.get = async () => ({
+    attachments: {
+      7: { origin: 'https://a.test', attachedAt: 1, port: 19223 },
+      8: { origin: 'https://b.test', attachedAt: 2, port: 19224 },
+    },
+  });
+  w.chrome.tabs.query = async () => [
+    { id: 7, url: 'https://a.test/x', title: 'A', active: true },
+    { id: 8, url: 'https://b.test/y', title: 'B', active: false },
+  ];
+  const [base, extra] = w.sockets;
+  base.open();
+  extra.open();
+  assert.equal(w.chrome.action.popups.at(-1).popup, 'popup.html');
+  base.receive({ policy: { origin_allowlist: {} }, session: { port: 19223, name: 'testing' } });
+  extra.receive({ policy: { origin_allowlist: {} }, session: { port: 19224, name: 'linkedin' } });
+  base.receive({ id: 1, tool: 'list_tabs', args: {} });
+  extra.receive({ id: 2, tool: 'list_tabs', args: {} });
+  await setImmediate();
+  await setImmediate();
+  const baseTabs = base.sent.find((msg) => msg.id === 1);
+  const extraTabs = extra.sent.find((msg) => msg.id === 2);
+  assert.deepEqual(baseTabs.result.tabs.map((tab) => tab.id), [7]);
+  assert.deepEqual(extraTabs.result.tabs.map((tab) => tab.id), [8]);
+  let listed;
+  w.listeners.message('sessions', {}, (res) => { listed = res; });
+  assert.equal(listed.sessions.length, 2);
+  assert.equal(listed.sessions[0].port, 19223);
+  assert.equal(listed.sessions[0].name, 'testing');
+  assert.equal(listed.sessions[1].port, 19224);
+  assert.equal(listed.sessions[1].name, 'linkedin');
+  w.chrome.tabs.get = async (id) => {
+    const tabs = await w.chrome.tabs.query();
+    return tabs.find((tab) => tab.id === id) || null;
+  };
+  base.receive({ id: 3, tool: 'close_tab', args: { id: 8 } });
+  await setImmediate();
+  await setImmediate();
+  const denied = base.sent.find((msg) => msg.id === 3);
+  assert.equal(denied.error.error_code, 'tab_not_attached');
 });
 
 test('events from a retired socket do not close the current connection', async () => {

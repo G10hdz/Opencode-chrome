@@ -1,4 +1,5 @@
 import { attachedTab, exactOrigin, mostRecentAttached, originAllowed, pollWhileAttached, serializeMutation } from "./policy.js";
+import { clampSessions, sessionPorts } from "./session-config.js";
 
 // opencode-chrome service worker: cliente WS del puente MCP + control CDP via chrome.debugger.
 
@@ -13,6 +14,11 @@ let reconnectTimer;
 let connectionTimer;
 let connectionAttempt = 0;
 let connected = false;
+let basePort = PORT;
+let sessionCount = 1;
+const lanes = new Map(); // port -> socket, solo cuando hay más de una sesión
+const sessionNames = new Map();
+const CALL_PORT = Symbol("callPort");
 const refStores = new Map(); // tabId -> { refs: { [ref]: selectorCSS } } del último snapshot
 const netStores = new Map(); // tabId -> { order: [requestId], byId: Map } ring buffer de red
 const consoleStores = new Map(); // tabId -> { entries: [] } ring buffer de consola
@@ -55,15 +61,66 @@ function setBadge(on) {
 // MV3 suspende el SW y con el mueren los timers: alarms despierta el contexto para reconectar
 const KEEPALIVE_ALARM = "reconnect";
 
-async function connect() {
-  if (ws && ws.readyState !== WebSocket.CLOSED) return;
-  clearTimeout(reconnectTimer);
-  const attempt = ++connectionAttempt;
-  const { token, port } = await chrome.storage.local.get(["token", "port"]);
-  if (attempt !== connectionAttempt) return;
-  if (!token) return; // sin token configurado en las opciones no hay a quien autenticar
-  const bridgePort = Number.isInteger(port) && port > 0 && port <= 65535 ? port : PORT;
-  const socket = new WebSocket(`ws://127.0.0.1:${bridgePort}/?token=${encodeURIComponent(token)}`);
+const laneTimers = new Map();
+const laneRetry = new Map();
+
+function anyOpen() {
+  if (ws && ws.readyState === WebSocket.OPEN) return true;
+  for (const socket of lanes.values()) if (socket.readyState === WebSocket.OPEN) return true;
+  return false;
+}
+
+function syncPopup() {
+  if (typeof chrome.action.setPopup !== "function") return;
+  let open = 0;
+  for (const socket of lanes.values()) if (socket.readyState === WebSocket.OPEN) open++;
+  chrome.action.setPopup({ popup: open > 1 ? "popup.html" : "" });
+}
+
+function noteSession(msg) {
+  if (!msg?.session || !Number.isInteger(msg.session.port)) return;
+  const name = typeof msg.session.name === "string" ? msg.session.name.trim().slice(0, 40) : "";
+  sessionNames.set(msg.session.port, name || String(msg.session.port));
+}
+
+function tagCall(args, port) {
+  const next = args && typeof args === "object" ? args : {};
+  if (sessionCount > 1) Object.defineProperty(next, CALL_PORT, { value: port });
+  return next;
+}
+
+function dispatch(socket, port, ev, touch) {
+  if (touch) touch();
+  let msg;
+  try {
+    msg = JSON.parse(ev.data);
+  } catch {
+    return;
+  }
+  noteSession(msg);
+  if (msg && typeof msg.policy === "object" && msg.policy !== null) {
+    const allow = msg.policy.origin_allowlist;
+    originAllowlist = allow && typeof allow === "object" ? allow : {};
+    refreshBadges().catch(() => {}); // un tab en origen allowlisted pasa a "on"
+    return;
+  }
+  if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
+  handle(msg.tool, tagCall(msg.args || {}, port))
+    .then((result) => send(socket, { id: msg.id, result }))
+    .catch((e) =>
+      send(socket, {
+        id: msg.id,
+        error: {
+          message: e?.message || String(e),
+          error_code: e?.errorCode ?? "internal_error",
+          remedy: e?.remedy ?? "retry the call; if it persists, report this message",
+        },
+      })
+    );
+}
+
+function openSingle(token, port, attempt, announce) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
   ws = socket;
   const watchConnection = (ms) => {
     clearTimeout(connectionTimer);
@@ -74,6 +131,8 @@ async function connect() {
   watchConnection(10000);
   socket.onopen = () => {
     if (ws !== socket) return;
+    if (announce)
+      socket.send(JSON.stringify({ configure: { sessions: sessionCount, port: basePort } }));
     setBadge(true);
     watchConnection(CONNECTION_IDLE_MS);
   };
@@ -91,45 +150,107 @@ async function connect() {
   };
   socket.onmessage = (ev) => {
     if (ws !== socket) return;
-    watchConnection(CONNECTION_IDLE_MS);
-    let msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch {
-      return;
-    }
-    if (msg && typeof msg.policy === "object" && msg.policy !== null) {
-      const allow = msg.policy.origin_allowlist;
-      originAllowlist = allow && typeof allow === "object" ? allow : {};
-      refreshBadges().catch(() => {}); // un tab en origen allowlisted pasa a "on"
-      return;
-    }
-    if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
-    handle(msg.tool, msg.args || {})
-      .then((result) => send(socket, { id: msg.id, result }))
-      .catch((e) =>
-        send(socket, {
-          id: msg.id,
-          error: {
-            message: e?.message || String(e),
-            error_code: e?.errorCode ?? "internal_error",
-            remedy: e?.remedy ?? "retry the call; if it persists, report this message",
-          },
-        })
-      );
+    dispatch(socket, port, ev, () => watchConnection(CONNECTION_IDLE_MS));
   };
+}
+
+function openLane(token, port, attempt, announce) {
+  const current = lanes.get(port);
+  if (current && current.readyState !== WebSocket.CLOSED) return;
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
+  lanes.set(port, socket);
+  if (port === basePort) ws = socket;
+  const watch = (ms) => {
+    clearTimeout(laneTimers.get(port));
+    laneTimers.set(
+      port,
+      setTimeout(() => {
+        if (lanes.get(port) === socket) {
+          try {
+            socket.close();
+          } catch {}
+        }
+      }, ms)
+    );
+  };
+  watch(10000);
+  socket.onopen = () => {
+    if (lanes.get(port) !== socket) return;
+    if (announce && port === basePort)
+      socket.send(JSON.stringify({ configure: { sessions: sessionCount, port: basePort } }));
+    setBadge(true);
+    watch(CONNECTION_IDLE_MS);
+    syncPopup();
+  };
+  socket.onclose = () => {
+    clearTimeout(laneTimers.get(port));
+    if (lanes.get(port) !== socket) return;
+    lanes.delete(port);
+    if (ws === socket) ws = null;
+    setBadge(anyOpen());
+    syncPopup();
+    clearTimeout(laneRetry.get(port));
+    laneRetry.set(
+      port,
+      setTimeout(() => {
+        if (attempt !== connectionAttempt) return;
+        openLane(token, port, attempt, announce);
+      }, RECONNECT_MS)
+    );
+  };
+  socket.onerror = () => {
+    try {
+      socket.close();
+    } catch {}
+  };
+  socket.onmessage = (ev) => {
+    if (lanes.get(port) !== socket) return;
+    dispatch(socket, port, ev, () => watch(CONNECTION_IDLE_MS));
+  };
+}
+
+async function connect() {
+  if (sessionCount <= 1 && ws && ws.readyState !== WebSocket.CLOSED) return;
+  if (sessionCount > 1) {
+    const planned = sessionPorts(basePort, sessionCount);
+    const full = planned.every((port) => {
+      const socket = lanes.get(port);
+      return socket && socket.readyState !== WebSocket.CLOSED;
+    });
+    if (full) return;
+  }
+  clearTimeout(reconnectTimer);
+  const attempt = ++connectionAttempt;
+  const stored = await chrome.storage.local.get(["token", "port", "sessions"]);
+  if (attempt !== connectionAttempt) return;
+  if (!stored.token) return; // sin token configurado en las opciones no hay a quien autenticar
+  basePort = Number.isInteger(stored.port) && stored.port > 0 && stored.port <= 65535 ? stored.port : PORT;
+  sessionCount = clampSessions(stored.sessions);
+  const announce = stored.sessions != null;
+  if (sessionCount <= 1) {
+    openSingle(stored.token, basePort, attempt, announce);
+    return;
+  }
+  for (const port of sessionPorts(basePort, sessionCount)) openLane(stored.token, port, attempt, announce);
 }
 
 function reconnectNow() {
   ++connectionAttempt;
   clearTimeout(reconnectTimer);
   clearTimeout(connectionTimer);
-  const previous = ws;
+  for (const timer of laneTimers.values()) clearTimeout(timer);
+  for (const timer of laneRetry.values()) clearTimeout(timer);
+  laneTimers.clear();
+  laneRetry.clear();
+  const previous = new Set(lanes.values());
+  if (ws) previous.add(ws);
+  lanes.clear();
   ws = null;
   setBadge(false);
-  if (previous) {
+  syncPopup();
+  for (const socket of previous) {
     try {
-      previous.close();
+      socket.close();
     } catch {}
   }
   connect();
@@ -142,7 +263,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return;
   }
   if (msg === "status") {
-    sendResponse({ connected: !!ws && ws.readyState === WebSocket.OPEN });
+    sendResponse({ connected: anyOpen() });
+    return;
+  }
+  if (msg === "sessions") {
+    const list = [];
+    const seen = new Set();
+    const add = (port, socket) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN || seen.has(port)) return;
+      seen.add(port);
+      list.push({ port, name: sessionNames.get(port) || String(port) });
+    };
+    for (const [port, socket] of lanes) add(port, socket);
+    if (sessionCount <= 1) add(basePort, ws);
+    sendResponse({ sessions: list });
+    return true;
+  }
+  if (msg && typeof msg === "object" && Number.isInteger(msg.attach)) {
+    toggleAttachment(msg.attach).then(
+      () => sendResponse({ ok: true }),
+      (err) => sendResponse({ ok: false, message: err?.message || String(err) })
+    );
+    return true;
   }
 });
 
@@ -160,7 +302,8 @@ chrome.runtime.onInstalled.addListener(() => connect());
 chrome.runtime.onStartup.addListener(() => connect());
 
 function send(socket, msg) {
-  if (ws === socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+  const live = socket === ws || [...lanes.values()].includes(socket);
+  if (live && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
 // Tool errors carry a machine-readable code + remedy so agents can self-heal.
@@ -176,8 +319,33 @@ const requireArg = (args, name) => {
     fail("missing_argument", "pass the required argument; see the tool schema", `missing argument ${name}`);
 };
 
+function callPortOf(args) {
+  if (sessionCount <= 1 || !args) return null;
+  const value = args[CALL_PORT];
+  return Number.isInteger(value) ? value : null;
+}
+
+function visibleAttachments(attachments, port) {
+  if (port == null) return attachments;
+  const out = {};
+  for (const [id, entry] of Object.entries(attachments || {})) {
+    if (!entry || typeof entry !== "object") continue;
+    const owner = Number.isInteger(entry.port) ? entry.port : basePort;
+    if (owner === port) out[id] = entry;
+  }
+  return out;
+}
+
+function carryPort(args, extra) {
+  const next = { ...(args && typeof args === "object" ? args : {}), ...extra };
+  const port = args?.[CALL_PORT];
+  if (Number.isInteger(port)) Object.defineProperty(next, CALL_PORT, { value: port });
+  return next;
+}
+
 async function resolveTabId(args) {
-  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const { [ATTACHMENTS]: all = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const attachments = visibleAttachments(all, callPortOf(args));
   if (args.tabId !== undefined) {
     if (typeof args.tabId !== "number")
       fail("invalid_argument", "pass a numeric tabId from list_tabs", "tabId must be a number");
@@ -209,18 +377,22 @@ async function assertAttached(tabId) {
   return tab;
 }
 
-async function toggleAttachment() {
+async function toggleAttachment(ownerPort) {
   return serializeMutation(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) fail("no_active_tab", "focus a tab and retry", "no active tab");
     const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
     const key = String(tab.id);
-    if (attachedTab(attachments, tab.id, tab.url, originAllowlist)) delete attachments[key];
+    const port = Number.isInteger(ownerPort) ? ownerPort : basePort;
+    const visible = visibleAttachments(attachments, sessionCount > 1 ? port : null);
+    if (attachedTab(visible, tab.id, tab.url, originAllowlist)) delete attachments[key];
     else {
       const origin = exactOrigin(tab.url);
       if (!origin)
         fail("unsupported_scheme", "only http/https tabs can be attached", "only http(s) tabs can be attached");
-      attachments[key] = { origin, attachedAt: Date.now() };
+      const entry = { origin, attachedAt: Date.now() };
+      if (sessionCount > 1) entry.port = port;
+      attachments[key] = entry;
     }
     await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
     await refreshBadges();
@@ -818,16 +990,19 @@ function REF_CHECK_SCRIPT(sel, fp) {
 
 // --- tools ---
 
-async function toolListTabs() {
+async function toolListTabs(args) {
   const tabs = await chrome.tabs.query({});
-  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const { [ATTACHMENTS]: all = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const attachments = visibleAttachments(all, callPortOf(args));
   return { tabs: tabs.filter((t) => attachedTab(attachments, t.id, t.url, originAllowlist)).map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
 }
 
-async function toolBrowserStatus() {
-  const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
+async function toolBrowserStatus(args) {
+  const { [ATTACHMENTS]: all = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const attachments = visibleAttachments(all, callPortOf(args));
   const tabs = await chrome.tabs.query({});
-  return { connected: !!ws && ws.readyState === WebSocket.OPEN, attached: tabs.filter((t) => attachedTab(attachments, t.id, t.url, originAllowlist)).map((t) => ({ tabId: t.id, origin: attachments[String(t.id)].origin, attachedAt: attachments[String(t.id)].attachedAt })) };
+  const connected = sessionCount > 1 ? anyOpen() : !!ws && ws.readyState === WebSocket.OPEN;
+  return { connected, attached: tabs.filter((t) => attachedTab(attachments, t.id, t.url, originAllowlist)).map((t) => ({ tabId: t.id, origin: attachments[String(t.id)].origin, attachedAt: attachments[String(t.id)].attachedAt })) };
 }
 
 async function toolNewTab(args) {
@@ -839,7 +1014,7 @@ async function handleCloseActivate(tool, args) {
   requireArg(args, "id");
   if (typeof args.id !== "number")
     fail("invalid_argument", "pass a numeric id from list_tabs", "id must be a number");
-  const tabId = await resolveTabId({ tabId: args.id });
+  const tabId = await resolveTabId(carryPort(args, { tabId: args.id }));
   if (tool === "close_tab") await chrome.tabs.remove(tabId);
   else await chrome.tabs.update(tabId, { active: true });
   return {};

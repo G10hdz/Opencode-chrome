@@ -7,10 +7,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import WebSocket, { WebSocketServer } from "ws";
 import { registerTools, outputToFile } from "./tools.js";
+import { parseSessionConfig, sessionPorts, DEFAULT_PORT, clampPort } from "./sessions.js";
 import { spawnSync } from "node:child_process";
 
 // default 19223 — 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
-const PORT = parseInt(process.env.OPENCODE_CHROME_PORT, 10) || 19223;
+// bridgePort es el puerto de ESTE proceso. Con el tope en 1 es el de siempre.
+let bridgePort = DEFAULT_PORT;
 const TIMEOUT_MS = parseInt(process.env.OPENCODE_CHROME_TIMEOUT_MS, 10) || 30000;
 // <30s: cada mensaje recibido resetea el idle timer del service worker (Chrome 116+)
 const KEEPALIVE_MS = parseInt(process.env.OPENCODE_CHROME_KEEPALIVE_MS, 10) || 20000;
@@ -79,6 +81,43 @@ function loadPolicy() {
     }
   }
   return { origin_allowlist: allow };
+}
+
+function sessionFile() {
+  return (
+    process.env.OPENCODE_CHROME_CONFIG ||
+    join(homedir(), ".config", "opencode-chrome", "config.json")
+  );
+}
+
+function loadSessionConfig() {
+  try {
+    return parseSessionConfig(JSON.parse(readFileSync(sessionFile(), "utf8")));
+  } catch {
+    return parseSessionConfig(null);
+  }
+}
+
+// Lo escribe el puente cuando la extensión avisa lo que la persona guardó.
+// Un peer no pasa por aquí: no puede subir el tope.
+function saveSessionConfig(input) {
+  const next = parseSessionConfig(input);
+  const file = sessionFile();
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, JSON.stringify({ sessions: next.sessions, port: next.port }) + "\n", {
+    mode: 0o600,
+  });
+  return next;
+}
+
+function explicitPort() {
+  return clampPort(process.env.OPENCODE_CHROME_PORT);
+}
+
+function sessionName() {
+  const raw = process.env.OPENCODE_CHROME_SESSION;
+  if (typeof raw !== "string") return "";
+  return raw.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 40);
 }
 
 const POLICY = loadPolicy();
@@ -159,7 +198,7 @@ function notConnected() {
   return toolError(
     "extension_disconnected",
     "start Chrome with the extension loaded and paste the bridge token into its options page, then retry",
-    `Chrome extension not connected on ws://127.0.0.1:${PORT}. ` +
+    `Chrome extension not connected on ws://127.0.0.1:${bridgePort}. ` +
       `Check Chrome is running and that the token in the extension options matches ` +
       `this bridge's token (printed to stderr at startup), then retry.`
   );
@@ -233,7 +272,7 @@ function attachPeer(ws) {
 
 function startPeerMode() {
   peerMode = true;
-  const url = `ws://127.0.0.1:${PORT}/?token=${encodeURIComponent(TOKEN)}&role=peer`;
+  const url = `ws://127.0.0.1:${bridgePort}/?token=${encodeURIComponent(TOKEN)}&role=peer`;
   peerSocket = new WebSocket(url);
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -249,7 +288,7 @@ function startPeerMode() {
     });
     peerSocket.once("error", (err) => {
       console.error(
-        `opencode-chrome: cannot attach to the bridge on 127.0.0.1:${PORT} (${err.message ?? err})`
+        `opencode-chrome: cannot attach to the bridge on 127.0.0.1:${bridgePort} (${err.message ?? err})`
       );
       finish(err);
     });
@@ -262,7 +301,7 @@ function startPeerMode() {
       }
       if (!settled && msg && Object.prototype.hasOwnProperty.call(msg, "policy")) {
         console.error(
-          `opencode-chrome: the bridge on 127.0.0.1:${PORT} is an older process and cannot take another client. Restart it and retry.`
+          `opencode-chrome: the bridge on 127.0.0.1:${bridgePort} is an older process and cannot take another client. Restart it and retry.`
         );
         try {
           peerSocket.close();
@@ -307,7 +346,7 @@ function callPeer(tool, args) {
           toolError(
             "bridge_busy",
             "restart the bridge that holds the port, then retry",
-            `cannot attach to the bridge on 127.0.0.1:${PORT}`
+            `cannot attach to the bridge on 127.0.0.1:${bridgePort}`
           )
         );
         return;
@@ -333,7 +372,7 @@ function callPeer(tool, args) {
         toolError(
           "bridge_busy",
           "restart the bridge that holds the port, then retry",
-          `cannot attach to the bridge on 127.0.0.1:${PORT}`
+          `cannot attach to the bridge on 127.0.0.1:${bridgePort}`
         )
       );
   }).then(
@@ -342,29 +381,74 @@ function callPeer(tool, args) {
   );
 }
 
-const wss = new WebSocketServer({ host: "127.0.0.1", port: PORT });
+let wss = null;
 
-const bound = new Promise((resolve) => {
-  wss.once("listening", () => {
-    listenerReady = true;
-    resolve();
+function listenOnce(port) {
+  return new Promise((resolve, reject) => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port });
+    const onError = (err) => {
+      server.on("error", () => {});
+      server.close();
+      reject(err);
+    };
+    server.once("error", onError);
+    server.once("listening", () => {
+      server.off("error", onError);
+      resolve(server);
+    });
   });
-  wss.on("error", (err) => {
-    if (!listenerReady && err.code === "EADDRINUSE") {
+}
+
+// Tope 1: si el puerto está ocupado, este proceso entra como peer.
+// Tope mayor: toma el siguiente puerto libre del rango y no se engancha.
+async function bindListener() {
+  const cfg = loadSessionConfig();
+  const pinned = explicitPort();
+  const base = pinned || cfg.port;
+  const ports = pinned || cfg.sessions === 1 ? [base] : sessionPorts(cfg.port, cfg.sessions);
+  for (const port of ports) {
+    try {
+      const server = await listenOnce(port);
+      wss = server;
+      bridgePort = port;
+      listenerReady = true;
+      server.on("error", (err) => {
+        console.error(`opencode-chrome: ${err.code ?? err.message}`);
+      });
+      serve(server);
+      const label = sessionName();
       console.error(
-        `opencode-chrome: 127.0.0.1:${PORT} already has a bridge, attaching as another client`
+        `opencode-chrome: listening on 127.0.0.1:${port}${label ? ` (${label})` : ""}`
       );
-      startPeerMode().then(resolve, () => process.exit(1));
       return;
+    } catch (err) {
+      if (err.code !== "EADDRINUSE") {
+        console.error(
+          `opencode-chrome: cannot listen on 127.0.0.1:${port} (${err.code ?? err.message})`
+        );
+        process.exit(1);
+      }
     }
+  }
+  if (cfg.sessions === 1) {
+    bridgePort = base;
     console.error(
-      `opencode-chrome: cannot listen on 127.0.0.1:${PORT} (${err.code ?? err.message})`
+      `opencode-chrome: 127.0.0.1:${base} already has a bridge, attaching as another client`
     );
-    process.exit(1);
-  });
-});
+    await startPeerMode();
+    return;
+  }
+  const hi = ports[ports.length - 1];
+  console.error(
+    `opencode-chrome: no free port in 127.0.0.1:${ports[0]}-${hi}. The session cap is ${cfg.sessions}. Close one, or raise it under Sesiones in the extension options.`
+  );
+  process.exit(1);
+}
 
-wss.on("connection", (ws, req) => {
+const bound = bindListener();
+
+function serve(server) {
+  server.on("connection", (ws, req) => {
   const origin = req.headers.origin;
   let url;
   try {
@@ -396,7 +480,13 @@ wss.on("connection", (ws, req) => {
   }
   socket = ws;
   // la policy se empuja en cada conexión: una reconexión con otro bridge resetea la allowlist
-  ws.send(JSON.stringify({ policy: POLICY }));
+  const name = sessionName();
+  ws.send(
+    JSON.stringify({
+      policy: POLICY,
+      session: { port: bridgePort, name: name || String(bridgePort) },
+    })
+  );
   // keepalive: no-op sin tool; la extension lo filtra y el SW recibe actividad que evita su suspension
   const keepalive = setInterval(() => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ id: -1 }));
@@ -407,6 +497,11 @@ wss.on("connection", (ws, req) => {
     try {
       msg = JSON.parse(data.toString());
     } catch {
+      return;
+    }
+    if (msg && msg.configure && typeof msg.configure === "object" && msg.id === undefined) {
+      const saved = saveSessionConfig(msg.configure);
+      console.error(`opencode-chrome: sessions ${saved.sessions} from port ${saved.port}`);
       return;
     }
     const entry = pending.get(msg?.id);
@@ -431,13 +526,16 @@ wss.on("connection", (ws, req) => {
   });
   ws.on("error", () => ws.terminate());
 });
+}
 
 const server = new McpServer({ name: "opencode-chrome", version: "0.1.1" });
 
 function releaseListener() {
   rejectPending("MCP client disconnected.");
-  for (const client of wss.clients) client.terminate();
-  wss.close();
+  if (wss) {
+    for (const client of wss.clients) client.terminate();
+    wss.close();
+  }
   server.close().catch(() => {});
 }
 
@@ -456,7 +554,9 @@ process.stdin.once("end", () => {
     try {
       peerSocket?.terminate();
     } catch {}
-    wss.close();
+    try {
+      wss?.close();
+    } catch {}
     server.close().catch(() => {});
     return;
   }

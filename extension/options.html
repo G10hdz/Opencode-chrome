@@ -7,6 +7,9 @@
       body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 2rem auto; padding: 0 1rem; }
       label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
       input { width: 100%; box-sizing: border-box; padding: 0.4rem; font-family: monospace; }
+      input[type="checkbox"] { width: auto; }
+      details { margin: 1rem 0; }
+      details p { margin-top: 0.5rem; }
       button { margin-top: 0.75rem; padding: 0.4rem 1rem; }
       #status { margin-left: 0.5rem; color: #2e7d32; }
       #conn { margin-top: 1rem; font-weight: 600; }
@@ -23,8 +26,18 @@
     <input id="token" autocomplete="off" spellcheck="false" />
     <label for="port">Bridge port (leave empty for 19223)</label>
     <input id="port" autocomplete="off" spellcheck="false" inputmode="numeric" />
+    <details>
+      <summary>Sesiones</summary>
+      <p>
+        Off keeps a single session. On lets the next terminal take the next port,
+        up to the number you set. The first port is the one above.
+      </p>
+      <label for="multi"><input id="multi" type="checkbox" /> Several sessions</label>
+      <label for="count">How many (1–10)</label>
+      <input id="count" type="number" min="1" max="10" value="1" />
+    </details>
     <button id="save">Save</button><span id="status"></span>
     <div id="conn">○ not connected</div>
-    <script src="options.js"></script>
+    <script type="module" src="options.js"></script>
   </body>
 </html>
