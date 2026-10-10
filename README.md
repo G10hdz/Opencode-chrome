@@ -64,6 +64,17 @@ shows `off` until the token is configured and the bridge is running.
 }
 ```
 
+The same command works for any MCP client. If the port is already taken by
+this bridge, the new process attaches to it and they share one extension
+and one token. Grok, in `~/.grok/config.toml`:
+
+```toml
+[mcp_servers.chrome]
+command = "node"
+args = ["/absolute/path/to/opencode-chrome/src/index.js"]
+enabled = true
+```
+
 **3. Pair the token:** the bridge generates a token at
 `~/.config/opencode-chrome/token` (or prints it to stderr and copies it to
 your clipboard at startup; set `OPENCODE_CHROME_TOKEN` to use your own).
@@ -180,9 +191,11 @@ only in files you install — there is no free-form eval tool. See
   matches. The options page shows the connection status live.
 - **A tool returns "Chrome extension not connected":** same causes as
   above; the bridge is up but no extension has paired.
-- **`cannot listen on 127.0.0.1:19223`:** another process holds the port.
-  Close the other bridge or MCP client, or set `OPENCODE_CHROME_PORT` and enter
-  the same port in the extension's options page.
+- **`cannot listen on 127.0.0.1:19223` or `cannot attach`:** something that
+  is not this bridge holds the port. Close it, or set `OPENCODE_CHROME_PORT`
+  and enter the same port in the extension's options page. A second copy of
+  this bridge does not need its own port: it attaches to the one already running.
+  If stderr says the bridge is an older process, restart that process.
 - **Connection drops after sleep or a restart:** the extension retries every
   three seconds while awake and uses a Chrome alarm to recover after suspension.
   A connection that receives no messages for 45 seconds is replaced. If a tool
@@ -269,6 +282,10 @@ backend, sin cuentas, sin analítica.
    ```json
    { "mcp": { "chrome": { "type": "local", "command": ["npx", "-y", "opencode-chrome"] } } }
    ```
+   El mismo comando sirve para cualquier cliente MCP. Si el puerto ya lo
+   tiene este puente, el proceso nuevo se engancha y comparten la extensión
+   y el token. En Grok (`~/.grok/config.toml`): `command = "node"` y
+   `args` con la ruta absoluta a `src/index.js`.
 3. **Token**: el puente genera uno en `~/.config/opencode-chrome/token` (o lo
    imprime por stderr y lo copia a tu portapapeles al arrancar;
    `OPENCODE_CHROME_TOKEN` para usar el tuyo). Pegalo en la página de

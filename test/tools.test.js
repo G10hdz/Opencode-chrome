@@ -720,6 +720,41 @@ test('bridge sends keepalive no-ops that the extension can ignore', async (t) =>
   assert.equal(await withTimeout(sawNoop, 5000, 'keepalive no-op'), true);
 });
 
+test('a second MCP client shares the bridge that already holds the port', async (t) => {
+  const bridge = await startBridge(t);
+  const seen = [];
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    seen.push(msg.tool);
+    reply({ id: msg.id, result: { tabs: [{ id: 7 }] } });
+  });
+  t.after(() => ws.close());
+  const second = await Bridge.start({ OPENCODE_CHROME_PORT: String(bridge.port) });
+  t.after(() => second.stop());
+  const attached = outcome(await second.callTool('list_tabs'));
+  assert.equal(attached.isError, false);
+  assert.match(attached.text, /"id":7/);
+  const owner = outcome(await bridge.callTool('browser_status'));
+  assert.equal(owner.isError, false);
+  assert.deepEqual(seen, ['list_tabs', 'browser_status']);
+});
+
+test('a browser origin cannot attach as a peer and replace the extension', async (t) => {
+  const bridge = await startBridge(t);
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { ok: true } });
+  });
+  t.after(() => ws.close());
+  const intruder = new WebSocket(
+    `ws://127.0.0.1:${bridge.port}/?token=${encodeURIComponent(BRIDGE_TOKEN)}&role=peer`,
+    { origin: 'https://evil.test' },
+  );
+  const closed = new Promise((resolve) => intruder.once('close', resolve));
+  await withTimeout(closed, 2000, 'intruder close');
+  const { isError } = outcome(await bridge.callTool('list_tabs'));
+  assert.equal(isError, false);
+  intruder.terminate();
+});
+
 test('bridge exits and releases its port when the MCP client closes stdin', async (t) => {
   const bridge = await startBridge(t);
   const ws = await connectExtension(bridge.port, () => {});
