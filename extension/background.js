@@ -520,7 +520,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   serializeMutation(async () => {
     const { [ATTACHMENTS]: attachments = {} } = await chrome.storage.session.get(ATTACHMENTS);
     const entry = attachments[String(tabId)];
-    if (entry && entry.origin !== exactOrigin(info.url)) {
+    if (entry && !originAllowed(entry.origin, info.url, originAllowlist)) {
       delete attachments[String(tabId)];
       await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
       await refreshBadges();
