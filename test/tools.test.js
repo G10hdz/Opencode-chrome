@@ -134,6 +134,7 @@ class Bridge {
         OPENCODE_CHROME_PORT: String(port),
         OPENCODE_CHROME_TIMEOUT_MS: String(TOOL_TIMEOUT_MS),
         OPENCODE_CHROME_TOKEN: BRIDGE_TOKEN,
+        OPENCODE_CHROME_CONFIG: join(tmpdir(), 'opencode-chrome-test-no-config.json'),
         ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -753,6 +754,100 @@ test('a browser origin cannot attach as a peer and replace the extension', async
   const { isError } = outcome(await bridge.callTool('list_tabs'));
   assert.equal(isError, false);
   intruder.terminate();
+});
+
+function spawnLoose(configFile) {
+  const env = { ...process.env };
+  delete env.OPENCODE_CHROME_PORT;
+  delete env.OPENCODE_CHROME_SESSION;
+  env.OPENCODE_CHROME_TOKEN = BRIDGE_TOKEN;
+  env.OPENCODE_CHROME_TIMEOUT_MS = String(TOOL_TIMEOUT_MS);
+  env.OPENCODE_CHROME_CONFIG = configFile;
+  const child = spawn(process.execPath, [INDEX], {
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  liveChildren.push(child);
+  child.stderr.setEncoding('utf8');
+  child.stderrBuf = '';
+  child.stderr.on('data', (chunk) => {
+    child.stderrBuf += chunk;
+  });
+  return child;
+}
+
+async function waitStderr(child, pattern) {
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    if (pattern.test(child.stderrBuf)) return child.stderrBuf;
+    if (child.exitCode != null) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`stderr timeout\n${child.stderrBuf}`);
+}
+
+async function freeBase() {
+  for (let n = 0; n < 30; n++) {
+    const base = 20000 + Math.floor(Math.random() * 18000);
+    const checks = await Promise.all([0, 1, 2].map((offset) => new Promise((resolve) => {
+      const server = net.createServer();
+      server.once('error', () => resolve(false));
+      server.listen(base + offset, '127.0.0.1', () => server.close(() => resolve(true)));
+    })));
+    if (checks.every(Boolean)) return base;
+  }
+  throw new Error('no free port range');
+}
+
+test('a higher session cap gives the next process its own port', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-sessions-'));
+  const file = join(dir, 'config.json');
+  const base = await freeBase();
+  writeFileSync(file, JSON.stringify({ sessions: 2, port: base }));
+  const first = spawnLoose(file);
+  t.after(() => first.kill());
+  assert.match(await waitStderr(first, /listening on/), new RegExp(`listening on 127\\.0\\.0\\.1:${base}(\\s|$)`));
+  const second = spawnLoose(file);
+  t.after(() => second.kill());
+  assert.match(await waitStderr(second, /listening on/), new RegExp(`listening on 127\\.0\\.0\\.1:${base + 1}(\\s|$)`));
+  const third = spawnLoose(file);
+  t.after(() => third.kill());
+  const exited = new Promise((resolve) => third.once('exit', resolve));
+  assert.match(await waitStderr(third, /no free port/), new RegExp(`${base}-${base + 1}`));
+  assert.equal(await exited, 1);
+});
+
+test('the extension stores the session cap and a peer cannot', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-sessions-'));
+  const file = join(dir, 'config.json');
+  const bridge = await startBridge(t, { OPENCODE_CHROME_CONFIG: file });
+  const ws = await connectExtension(bridge.port, (msg, reply) => {
+    reply({ id: msg.id, result: { ok: true } });
+  });
+  t.after(() => ws.close());
+  ws.send(JSON.stringify({ configure: { sessions: 99, port: 19230 } }));
+  const started = Date.now();
+  let raw = '';
+  while (Date.now() - started < 3000) {
+    try {
+      raw = readFileSync(file, 'utf8');
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  assert.deepEqual(JSON.parse(raw), { sessions: 10, port: 19230 });
+  const peer = new WebSocket(
+    `ws://127.0.0.1:${bridge.port}/?token=${encodeURIComponent(BRIDGE_TOKEN)}&role=peer`,
+  );
+  await new Promise((resolve, reject) => {
+    peer.once('open', resolve);
+    peer.once('error', reject);
+  });
+  peer.send(JSON.stringify({ configure: { sessions: 2, port: 19240 } }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { sessions: 10, port: 19230 });
+  peer.close();
 });
 
 test('bridge exits and releases its port when the MCP client closes stdin', async (t) => {
