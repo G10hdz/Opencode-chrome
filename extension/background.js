@@ -873,18 +873,12 @@ async function toolNavigate(args) {
   // ignore_cache deshabilita el HTTP cache durante la navegación y se restaura
   // después (Page.reload también toma ignoreCache propio)
   const bypass = args.ignore_cache === true;
-  if (args.init_script !== undefined && typeof args.init_script !== "string")
-    fail("invalid_argument", "init_script must be a string of JS", "navigate: bad init_script");
   // chrome.tabs.update no necesita el debugger; las acciones CDP, el snapshot
-  // post-nav, init_script y el beforeunload auto-answer sí
-  if (action || bypass || args.include_snapshot === true || args.init_script !== undefined || args.handle_before_unload === true)
+  // post-nav y el beforeunload auto-answer sí
+  if (action || bypass || args.include_snapshot === true || args.handle_before_unload === true)
     await ensureAttached(tabId);
   try {
     if (bypass) await cdp(tabId, "Network.setCacheDisabled", { cacheDisabled: true });
-    // persiste para futuras navs del target mientras la sesión debugger viva;
-    // se limpia al detach
-    if (args.init_script !== undefined)
-      await cdp(tabId, "Page.addScriptToEvaluateOnNewDocument", { source: args.init_script });
     // handle_before_unload: al estar attached, un beforeunload entra por
     // javascriptDialogOpening y la política del tab (default accept) lo responde
     if (action === "reload") {
@@ -2014,24 +2008,39 @@ async function toolRunRecipe(args) {
       `run_recipe: origen no permitido: ${recipe.origin}`
     );
   const params = args.params && typeof args.params === "object" ? args.params : {};
-  let out = null;
-  for (const step of recipe.steps) {
-    if (typeof step.navigate === "string")
-      out = await toolNavigate({ url: recipeInterp(step.navigate, params), tabId });
-    else if (typeof step.wait_for === "string")
-      out = await toolWaitFor({ text: recipeInterp(step.wait_for, params), timeout: step.timeout, tabId });
-    else if (typeof step.eval === "string")
-      out = await evaluate(tabId, recipeInterp(step.eval, params, true));
-    else if (Array.isArray(step.columns))
-      out = {
-        columns: step.columns,
-        rows: (Array.isArray(out) ? out : []).map((row) =>
-          Object.fromEntries(step.columns.map((c) => [c, row?.[c]]))
-        ),
-      };
-    else fail("invalid_recipe", `unknown step: ${JSON.stringify(step)}`, "run_recipe: step desconocido");
+  // init_script: JS on-new-document registrado solo por la duración de la receta
+  // (auth/session setup). File-sourced como eval, removido al terminar para que
+  // no se acumulen ni sigan corriendo en navs ajenos a la receta.
+  const scriptIds = [];
+  try {
+    let out = null;
+    for (const step of recipe.steps) {
+      if (typeof step.navigate === "string")
+        out = await toolNavigate({ url: recipeInterp(step.navigate, params), tabId });
+      else if (typeof step.wait_for === "string")
+        out = await toolWaitFor({ text: recipeInterp(step.wait_for, params), timeout: step.timeout, tabId });
+      else if (typeof step.init_script === "string") {
+        await ensureAttached(tabId);
+        const res = await cdp(tabId, "Page.addScriptToEvaluateOnNewDocument", {
+          source: recipeInterp(step.init_script, params, true),
+        });
+        if (res?.identifier) scriptIds.push(res.identifier);
+      } else if (typeof step.eval === "string")
+        out = await evaluate(tabId, recipeInterp(step.eval, params, true));
+      else if (Array.isArray(step.columns))
+        out = {
+          columns: step.columns,
+          rows: (Array.isArray(out) ? out : []).map((row) =>
+            Object.fromEntries(step.columns.map((c) => [c, row?.[c]]))
+          ),
+        };
+      else fail("invalid_recipe", `unknown step: ${JSON.stringify(step)}`, "run_recipe: step desconocido");
+    }
+    return { name: recipe.name, output: out };
+  } finally {
+    for (const identifier of scriptIds)
+      await cdp(tabId, "Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
   }
-  return { name: recipe.name, output: out };
 }
 
 // Árbol de frames del tab: los OOPIFs (cross-origin, sesión hija del auto-attach)

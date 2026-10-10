@@ -78,11 +78,12 @@ is JSON-stringified into text.
   `~/.config/opencode-chrome/policy.json` (SSO redirects). The allowlist lives
   bridge-side only; the page can never reach it. Do not bypass this resolver
   with direct tab or debugger access.
-- Recipe `eval` scripts come only from adapter JSON files under
-  `~/.config/opencode-chrome/adapters/` (user-authored, same trust class as
-  policy.json). There is no free-form eval tool; `run_recipe` params are
-  interpolated as JSON-encoded literals inside `eval` steps so a param value
-  can never escape the script's string context.
+- Recipe `eval` and `init_script` scripts come only from adapter JSON files
+  under `~/.config/opencode-chrome/adapters/` (user-authored, same trust class
+  as policy.json). There is no free-form eval tool; `run_recipe` params are
+  interpolated as JSON-encoded literals inside `eval`/`init_script` steps so a
+  param value can never escape the script's string context. `init_script`
+  registrations are removed when the recipe ends.
 - OOPIFs (out-of-process iframes) attach as child debugger sessions via
   `Target.setAutoAttach{flatten:true}`; `resolveFrameSession` only returns a
   session whose frame origin passes `originAllowed` for the tab's attached
