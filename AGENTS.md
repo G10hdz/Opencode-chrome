@@ -9,8 +9,10 @@ Two halves that talk over a localhost WebSocket:
 
 - **Bridge** (`src/`) — a Node MCP server (stdio) that also runs a WebSocket
   server on `127.0.0.1:19223`. Any MCP client calls the tools; the bridge
-  forwards each call to the extension and returns the reply. A second client
-  that finds the port busy attaches to the bridge already running.
+  forwards each call to the extension and returns the reply. With the session
+  cap at 1 (the default), a second client that finds the port busy attaches
+  to the bridge already running. A higher cap, set by the person under
+  Sesiones in the extension options, gives each new process the next port.
 - **Extension** (`extension/`) — an MV3 service worker that connects to the
   bridge as a WebSocket client and drives only user-attached tabs through
   `chrome.debugger` (Chrome DevTools Protocol). Attachments are session-scoped
@@ -68,6 +70,13 @@ is JSON-stringified into text.
   A second local MCP process attaches with `role=peer` and no Origin. That
   socket can submit tool calls; it never replaces the extension connection.
   A peer that sends an Origin is rejected.
+  `~/.config/opencode-chrome/config.json` holds `{ sessions, port }` with
+  `sessions` from 1 to 10. Missing file means one session. The extension
+  writes it through the bridge after the person saves options. A peer cannot.
+  Above 1, a new process binds the next free `127.0.0.1` port in that range
+  and does not attach as a peer. It never binds past the cap. Each port's
+  extension socket only resolves tabs attached to that port. A tab belongs
+  to one port.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and reports a `match_level`: `exact` (selector
   and fingerprint intact), `reidentified` (selector dead or pointing at a
