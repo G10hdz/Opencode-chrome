@@ -449,6 +449,34 @@ test('wait_download maps an interrupted download to download_interrupted', async
   assert.equal(w.sockets[0].sent[0].error.error_code, 'download_interrupted');
 });
 
+test('wait_download does not return a file from another session', async () => {
+  const w = await worker({ token: 'test-token', sessions: 2, port: 19223 });
+  w.sockets[0].open();
+  w.sockets[1].open();
+  w.chrome.storage.session.get = async () => ({
+    attachments: {
+      7: { origin: 'https://app.example.com', attachedAt: 1, port: 19223 },
+      8: { origin: 'https://other.example.com', attachedAt: 2, port: 19224 },
+    },
+  });
+  w.chrome.tabs.get = async (id) => ({
+    id,
+    url: id === 8 ? 'https://other.example.com/' : 'https://app.example.com/',
+  });
+  const now = new Date().toISOString();
+  w.chrome.downloads.search = async () => [{
+    id: 9, state: 'complete', filename: '/tmp/secret.pdf', fileSize: 4,
+    mime: 'application/pdf', url: 'https://other.example.com/secret.pdf',
+    startTime: now, exists: true,
+  }];
+  w.sockets[0].receive({ id: 1, tool: 'wait_download', args: { tabId: 7, timeout_ms: 1000 } });
+  await setImmediate();
+  await setImmediate();
+  const reply = w.sockets[0].sent.find((msg) => msg.id === 1);
+  assert.equal(reply?.result?.filename, undefined);
+  assert.equal(reply?.error?.error_code, 'downloads_not_isolated');
+});
+
 test('run_recipe gates on the attached origin and runs steps with escaped params', async () => {
   const w = await worker();
   w.sockets[0].open();
