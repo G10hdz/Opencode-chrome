@@ -154,7 +154,7 @@ function openSingle(token, port, attempt, announce) {
   };
 }
 
-function openLane(token, port, attempt, announce) {
+function openLane(token, port, announce) {
   const current = lanes.get(port);
   if (current && current.readyState !== WebSocket.CLOSED) return;
   const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
@@ -190,11 +190,12 @@ function openLane(token, port, attempt, announce) {
     setBadge(anyOpen());
     syncPopup();
     clearTimeout(laneRetry.get(port));
+    // reconnectNow cancela este timer antes de cerrar el socket. Si solo
+    // cambió el intento, el puerto sigue en el plan y tiene que volver.
     laneRetry.set(
       port,
       setTimeout(() => {
-        if (attempt !== connectionAttempt) return;
-        openLane(token, port, attempt, announce);
+        openLane(token, port, announce);
       }, RECONNECT_MS)
     );
   };
@@ -231,7 +232,7 @@ async function connect() {
     openSingle(stored.token, basePort, attempt, announce);
     return;
   }
-  for (const port of sessionPorts(basePort, sessionCount)) openLane(stored.token, port, attempt, announce);
+  for (const port of sessionPorts(basePort, sessionCount)) openLane(stored.token, port, announce);
 }
 
 function reconnectNow() {
@@ -291,7 +292,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
-  // CONNECTING cuenta como intento en curso; no duplicar conexiones
+  // CONNECTING cuenta como intento en curso; no duplicar conexiones.
+  // Con varias sesiones el base puede seguir arriba y otro puerto no.
+  if (sessionCount > 1) {
+    const missing = sessionPorts(basePort, sessionCount).some((port) => {
+      const socket = lanes.get(port);
+      return !socket || socket.readyState === WebSocket.CLOSED;
+    });
+    if (missing) connect();
+    return;
+  }
   if (!ws || ws.readyState === WebSocket.CLOSED) connect();
 });
 
