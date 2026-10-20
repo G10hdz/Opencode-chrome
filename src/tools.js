@@ -4,7 +4,7 @@ import { z } from "zod";
 const tabId = z.number().int().optional();
 const ref = z.union([z.string(), z.number()]);
 // include_snapshot: mutaciones devuelven el árbol fresco en la misma respuesta
-// (sus refs reemplazan a los del snapshot anterior — el DOM ya cambió)
+// (sus refs reemplazan a los del snapshot anterior, el DOM ya cambió)
 const includeSnapshot = z.boolean().optional();
 // output_path: payloads grandes (snapshot/screenshot/body) a archivo en vez de inline
 const outputPath = z.string().optional();
@@ -61,7 +61,7 @@ export const TOOLS = [
   {
     name: "find",
     description:
-      "Find interactive elements by accessible-name text (substring, case-insensitive) and/or role (button, link, textbox, combobox, checkbox, radio...). Optional selector scopes the search. Returns matching [ref] lines only — refs are usable with click/type/etc. output_path writes the matches to a file and returns {path, bytes} instead.",
+      "Find interactive elements by accessible-name text (substring, case-insensitive) and/or role (button, link, textbox, combobox, checkbox, radio...). Optional selector scopes the search. Returns matching [ref] lines only: refs are usable with click/type/etc. output_path writes the matches to a file and returns {path, bytes} instead.",
     schema: {
       text: z.string().optional(),
       role: z.string().optional(),
@@ -80,7 +80,7 @@ export const TOOLS = [
   {
     name: "list_frames",
     description:
-      "List the tab's frame tree: frameId, url, parent, oopif flag, sessionId and whether the frame's origin is allowed by the tab's origin allowlist. An out-of-process iframe is only reachable when its origin is allowlisted for the attached origin (same rule as an SSO redirect — see ~/.config/opencode-chrome/policy.json). Pass its frameId or a unique url substring as `frame` to snapshot/find/read_text.",
+      "List the tab's frame tree: frameId, url, parent, oopif flag, sessionId and whether the frame's origin is allowed by the tab's origin allowlist. An out-of-process iframe is only reachable when its origin is allowlisted for the attached origin (same rule as an SSO redirect, see ~/.config/opencode-chrome/policy.json). Pass its frameId or a unique url substring as `frame` to snapshot/find/read_text.",
     schema: { tabId },
   },
   {
@@ -138,7 +138,7 @@ export const TOOLS = [
   {
     name: "list_profile_keys",
     description:
-      "List the key names stored for an autofill profile (chrome.storage.local.profiles.<profile>). Names only — values never leave the extension.",
+      "List the key names stored for an autofill profile (chrome.storage.local.profiles.<profile>). Names only: values never leave the extension.",
     schema: { profile: z.string() },
   },
   {
@@ -189,7 +189,7 @@ export const TOOLS = [
   {
     name: "list_storage_keys",
     description:
-      "Key names present in the page's localStorage and sessionStorage (values never leave the tab — same boundary as list_profile_keys). Useful to check auth/session state without exposing tokens. null means the storage is inaccessible (e.g. sandboxed context).",
+      "Key names present in the page's localStorage and sessionStorage (values never leave the tab, same boundary as list_profile_keys). Useful to check auth/session state without exposing tokens. null means the storage is inaccessible (e.g. sandboxed context).",
     schema: { tabId },
   },
   {
@@ -220,7 +220,7 @@ export const TOOLS = [
   {
     name: "run_recipe",
     description:
-      "Run a site adapter from ~/.config/opencode-chrome/adapters/<name>.json on an attached tab. The adapter's declared `origin` must be within the attachment's reach (exact or allowlisted). Steps: navigate, wait_for, eval, columns — `columns` projects the last eval result into {columns, rows}. `params` fills {{key}} placeholders; inside `eval` steps each {{key}} becomes a JSON-encoded literal (write it bare, no quotes).",
+      "Run a site adapter from ~/.config/opencode-chrome/adapters/<name>.json on an attached tab. The adapter's declared `origin` must be within the attachment's reach (exact or allowlisted). Steps: navigate, wait_for, eval, columns: `columns` projects the last eval result into {columns, rows}. `params` fills {{key}} placeholders; inside `eval` steps each {{key}} becomes a JSON-encoded literal (write it bare, no quotes).",
     schema: { name: z.string(), params: z.record(z.string()).optional(), tabId },
   },
   {
@@ -254,7 +254,7 @@ export const TOOLS = [
   {
     name: "wait_for",
     description:
-      "Poll the page innerText until text appears or timeout (ms) elapses. text accepts a string or an array — an array resolves with the first alternative found (matched in the result).",
+      "Poll the page innerText until text appears or timeout (ms) elapses. text accepts a string or an array: an array resolves with the first alternative found (matched in the result).",
     schema: { text: z.union([z.string(), z.array(z.string()).min(1)]), timeout: z.number().int().optional(), tabId },
   },
 ];

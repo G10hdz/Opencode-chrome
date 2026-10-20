@@ -16,7 +16,7 @@
 // - chrome.storage.local {token, port} pairing is the same write options.js
 //   performs on save; the 'reconnect' alarm fires the extension's existing
 //   keepalive handler -> connect(). Evaluated in the worker over a raw
-//   DevTools socket — the one surface Playwright cannot reach.
+//   DevTools socket: the one surface Playwright cannot reach.
 //
 // Declared simulacrum: the attach record is seeded with the same
 // chrome.storage.session write that toggleAttachment performs after the
@@ -219,7 +219,7 @@ export async function getSw(env) {
 // Same write toggleAttachment performs after chrome.action.onClicked. Then
 // waits for the tab to commit its URL: chrome.tabs.create resolves before
 // navigation commits, and attachedTab checks tab.url against the stored
-// origin — resolving earlier would race the load and fail the origin check.
+// origin: resolving earlier would race the load and fail the origin check.
 export async function seedAttach(env, tabId, origin) {
   const sw = await getSw(env);
   const ready = await sw.evaluate(`(async () => {

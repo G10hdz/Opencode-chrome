@@ -805,7 +805,7 @@ test('press_key refuses text keys while a sensitive field has focus', async () =
   const keyCalls = () =>
     w.chrome.debugger.sentCommands.filter((c) => c.method === 'Input.dispatchKeyEvent');
   // foco en un password: las teclas con texto no deben despacharse (bypass del
-  // takeover gate — Tab+keystrokes llenaría el campo sin pasar por resolveRef)
+  // takeover gate: Tab+keystrokes llenaría el campo sin pasar por resolveRef)
   w.chrome.debugger.responses['Runtime.evaluate'] = { result: { value: 'password' } };
   w.sockets[0].receive({ id: 1, tool: 'press_key', args: { tabId: 7, key: 'x' } });
   await setImmediate();

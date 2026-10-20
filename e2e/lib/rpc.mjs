@@ -2,7 +2,7 @@
 // stdio and a CDP client over raw DevTools websockets.
 //
 // The browser-level DevTools endpoint rejects the 'jsonrpc' property outright
-// and its error reply carries no id (undeliverable — the request just hangs),
+// and its error reply carries no id (undeliverable, the request just hangs),
 // so only the MCP client sends the tag.
 
 import WebSocket from 'ws';

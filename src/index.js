@@ -10,7 +10,7 @@ import { registerTools, outputToFile } from "./tools.js";
 import { parseSessionConfig, sessionPorts, DEFAULT_PORT, clampPort } from "./sessions.js";
 import { spawnSync } from "node:child_process";
 
-// default 19223 — 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
+// default 19223: 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
 // bridgePort es el puerto de ESTE proceso. Con el tope en 1 es el de siempre.
 let bridgePort = DEFAULT_PORT;
 const TIMEOUT_MS = parseInt(process.env.OPENCODE_CHROME_TIMEOUT_MS, 10) || 30000;
@@ -49,7 +49,7 @@ function copyToClipboard(text) {
 
 // Origin allowlist opcional: ~/.config/opencode-chrome/policy.json
 // {"origin_allowlist": {"https://app.example.com": ["https://sso.example.com"]}}
-// Se empuja a la extensión al conectar — la policy vive aquí, no en la página.
+// Se empuja a la extensión al conectar, la policy vive aquí, no en la página.
 // Vacía = solo origen exacto (el default no se debilita).
 function validOrigin(s) {
   try {
@@ -126,7 +126,7 @@ if (Object.keys(POLICY.origin_allowlist).length)
 
 // Site adapters (PARITY_SPEC 16): JSON en ~/.config/opencode-chrome/adapters/.
 // El modelo elige qué receta correr; el JS de `eval` vive solo en archivos del
-// usuario — nunca llega al modelo como herramienta de eval libre.
+// usuario: nunca llega al modelo como herramienta de eval libre.
 const ADAPTERS_DIR =
   process.env.OPENCODE_CHROME_ADAPTERS ||
   join(homedir(), ".config", "opencode-chrome", "adapters");
@@ -172,7 +172,7 @@ const copied = process.env.OPENCODE_CHROME_TOKEN ? false : copyToClipboard(TOKEN
 console.error(
   `opencode-chrome: extension token ${TOKEN}` +
     (copied ? " (copied to your clipboard)" : "") +
-    " — paste it into the extension options page"
+    " (paste it into the extension options page)"
 );
 
 let socket = null;
@@ -582,7 +582,7 @@ async function handleTool(tool, args) {
     }
     let result = await callExtension(tool, args);
     // output_path: el payload pesado (snapshot/screenshot/body/text) se escribe a
-    // archivo aquí, en el bridge — la extensión no tiene acceso a fs
+    // archivo aquí, en el bridge, la extensión no tiene acceso a fs
     try {
       const written = outputToFile(tool, args, result);
       if (written) result = written;
