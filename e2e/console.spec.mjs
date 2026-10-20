@@ -3,7 +3,7 @@ import { getSw } from './lib/harness.mjs';
 
 test('list_console_messages captures console calls and uncaught exceptions', async ({ env, attached }) => {
   // prime: adjunta el debugger y habilita Runtime/Log antes de emitir.
-  // (Log.entryAdded hace replay de entradas recientes del browser — no asumir vacío)
+  // (Log.entryAdded hace replay de entradas recientes del browser, no asumir vacío)
   const base = await env.mcp.call('list_console_messages', { tabId: attached.tabId, filter: 'e2e-marker' });
   expect(base.messages.length).toBe(0);
 

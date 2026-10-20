@@ -879,7 +879,7 @@ function SNAPSHOT_SCRIPT(opts) {
       matches += 1;
       line = "[ref=" + refCount + "] " + describe(el);
       // fp = identidad del elemento al momento del snapshot; se verifica antes de actuar.
-      // {t:tag, n:name, r:role, c:classHash} — los tiers de resolveRef usan n/t para re-identificar.
+      // {t:tag, n:name, r:role, c:classHash}: los tiers de resolveRef usan n/t para re-identificar.
       refs[refCount] = {
         sel: selectorFor(el),
         sensitive: isSensitive(el),
@@ -1235,7 +1235,7 @@ async function elementCenter(tabId, sel, sessionId) {
   );
 }
 
-// include_snapshot: las mutaciones cambian el DOM — devuelve el árbol fresco en
+// include_snapshot: las mutaciones cambian el DOM: devuelve el árbol fresco en
 // la misma respuesta. Sus refs reemplazan el store (los previos ya no aplican).
 async function withSnapshot(tabId, sessionId, args, out) {
   if (args.include_snapshot !== true) return out;
@@ -1399,7 +1399,7 @@ async function toolSelect(args) {
     sessionId
   );
   if (!out.selected) {
-    const extra = out.available ? ` — available: ${out.available.join(", ")}` : "";
+    const extra = out.available ? ` · available: ${out.available.join(", ")}` : "";
     const message = `select: ${out.error}${extra}`;
     if (out.error === "not_found")
       fail("element_not_found", "the element moved or vanished; take a new snapshot and retry", message);
@@ -1695,7 +1695,7 @@ function keyDef(tok, modifiers) {
 // press_key no pasa por resolveRef: las teclas con texto caen en el
 // activeElement, así que el gate de campos sensibles se repite aquí sobre el
 // foco real. isSensitive es copia idéntica de SNAPSHOT_SCRIPT/REF_CHECK_SCRIPT
-// (tercer sitio — invariante AGENTS.md). "iframe" = el foco está dentro de un
+// (tercer sitio: invariante AGENTS.md). "iframe" = el foco está dentro de un
 // OOPIF y hay que mirar la sesión del frame; ahí sí se exige hasFocus() porque
 // un frame no enfocado conserva un activeElement viejo.
 function FOCUS_SENSITIVE_EXPR(requireFocus) {
@@ -2167,7 +2167,7 @@ async function toolWaitDownload(args = {}) {
 }
 
 // Adapters validados bridge-side (~/.config/opencode-chrome/adapters/). El origen
-// de la receta debe caer dentro del alcance de la attachment — misma frontera que
+// de la receta debe caer dentro del alcance de la attachment, misma frontera que
 // SSO redirects y OOPIFs. El JS de `eval` lo escribió el usuario en su disco; el
 // modelo solo pasa params, interpolados como literales JSON en steps eval
 // (imposible romper el contexto del script con un valor).

@@ -7,7 +7,7 @@ export function exactOrigin(url) {
   }
 }
 
-// allowlist: { "https://app.example.com": ["https://sso.example.com"] } — orígenes extra que
+// allowlist: { "https://app.example.com": ["https://sso.example.com"] }: orígenes extra que
 // una attachment del origen key acepta sin re-attach (SSO redirects). La empuja el bridge al
 // conectar desde policy.json; vacía/undefined = solo origen exacto. Direccional: incluir B
 // bajo A no habilita A bajo B.

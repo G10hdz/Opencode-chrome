@@ -35,9 +35,9 @@ AI-attribution trailers, no generated-code banners.
 
 The tool contract lives in three files that must stay in sync:
 
-1. `src/tools.js` — the `TOOLS` array (name, description, zod schema).
-2. `extension/background.js` — the `TOOLS` map (name → implementation).
-3. `test/tools.test.js` — the `EXPECTED_TOOLS` list, plus a test if the tool
+1. `src/tools.js`: the `TOOLS` array (name, description, zod schema).
+2. `extension/background.js`: the `TOOLS` map (name → implementation).
+3. `test/tools.test.js`: the `EXPECTED_TOOLS` list, plus a test if the tool
    has real behavior.
 
 If the tool grows what `chrome.debugger` can do, check the permission
@@ -54,7 +54,7 @@ Missing one ships a bridge or extension that reports a different version
 than npm.
 
 1. Bump on a `chore/` branch and merge.
-2. `npm publish` — needs `npm login` and a 2FA code; `prepublishOnly`
+2. `npm publish`: needs `npm login` and a 2FA code; `prepublishOnly`
    runs `npm test` first.
 3. `git tag -a v<version>` and push the tag.
 4. `npm run pack`, then create the GitHub release attaching

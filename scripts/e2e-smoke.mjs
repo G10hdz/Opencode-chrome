@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // E2E smoke: real Chrome + real extension + real bridge over MCP stdio.
-// NOT part of `npm test` — needs a Chrome binary and writes to a temp profile.
+// NOT part of `npm test`: needs a Chrome binary and writes to a temp profile.
 // Run by hand:
 //   node scripts/e2e-smoke.mjs
 //   OPENCODE_CHROME_BIN=/path/to/chrome   (auto-detected otherwise)
@@ -33,11 +33,11 @@ async function step(name, fn) {
   try {
     const detail = await fn();
     steps.push({ name, ok: true });
-    console.log(`PASS ${name}${detail ? ` — ${detail}` : ''}`);
+    console.log(`PASS ${name}${detail ? `: ${detail}` : ''}`);
     return detail;
   } catch (err) {
     steps.push({ name, ok: false });
-    console.log(`FAIL ${name} — ${err.message}`);
+    console.log(`FAIL ${name}: ${err.message}`);
     throw err; // later steps depend on earlier state
   }
 }
@@ -146,7 +146,7 @@ async function extensionSwSocket(devtoolsPort, extensionId) {
 
 // Minimal JSON-RPC client for MCP stdio and CDP websockets. The browser-level
 // DevTools endpoint rejects the 'jsonrpc' property outright (and its error
-// reply carries no id, so a tagged request just hangs) — only MCP gets the tag.
+// reply carries no id, so a tagged request just hangs); only MCP gets the tag.
 class Rpc {
   constructor(jsonrpcTag = true) {
     this.jsonrpcTag = jsonrpcTag;
@@ -191,7 +191,7 @@ class CdpSocket extends Rpc {
     this.ws.send(JSON.stringify(obj));
   }
   // The service worker has a single execution context (chrome.* present), so a
-  // plain evaluate lands in the right place — Runtime.enable/ contextId is
+  // plain evaluate lands in the right place: Runtime.enable/ contextId is
   // only needed on page targets and has been observed to hang on
   // chrome-extension:// targets.
   async evaluate(expr) {
@@ -281,7 +281,7 @@ async function main() {
       return r.ok ? r.json() : null;
     });
 
-    // Load the extension over CDP (browser target), which returns its id —
+    // Load the extension over CDP (browser target), which returns its id:
     // no --load-extension flag, no profile-prefs probing.
     let extensionId;
     await step('Extensions.loadUnpacked', async () => {

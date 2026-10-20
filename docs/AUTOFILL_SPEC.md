@@ -2,7 +2,7 @@
 
 Spec-level design for adding structured form filling to opencode-chrome.
 Scope: reading a form into a schema, mapping profile data onto it, and
-filling — with the user keeping the final submit. Bulk autonomous
+filling, with the user keeping the final submit. Bulk autonomous
 application loops (LinkedIn Easy Apply runners etc.) are out of scope.
 
 Status: implemented (form_schema, apply_mapping, list_profile_keys, press_key).
@@ -26,10 +26,10 @@ the model context.
   OpenJobAutofill (schema-isolated PII), AutoApplyMax (multi-selector
   recovery), plus platform defense profiles for LinkedIn/Workday/
   Greenhouse/Lever.
-- E-2: `extension/background.js` — current `toolClick` uses
+- E-2: `extension/background.js`: current `toolClick` uses
   `el.click()` (untrusted event); `toolType` already uses
   `Input.insertText` (trusted). `toolReadText`/`toolSnapshot` exist.
-- E-3: OpenCLI `opencli-browser` skill — target contract (ref|CSS|semantic),
+- E-3: OpenCLI `opencli-browser` skill: target contract (ref|CSS|semantic),
   `match_level` envelope, `fill` with verified read-back, `select` by
   label, compound form metadata (date format, select options, file accept).
 
@@ -37,15 +37,15 @@ the model context.
 
 1. `Event.isTrusted` is false for `el.click()` and `dispatchEvent`. Sites
    that care (LinkedIn, some ATS) flag or revert. CDP `Input.dispatch*`
-   produces trusted events — we already use it for typing; clicks and
+   produces trusted events: we already use it for typing; clicks and
    selects must go through it too, or the human clicks the critical
-   buttons (proposed: both — trusted CDP for field ops, human for final
+   buttons (proposed: both; trusted CDP for field ops, human for final
    submit).
 2. React/controlled inputs revert `input.value = x`. Must call the
    native prototype setter then dispatch bubbling `input`/`change`.
    Observed pattern from E-1.
 3. Honeypot fields (`display:none`, `opacity:0`, off-screen) must be
-   filtered before any mapping — check `getBoundingClientRect()` +
+   filtered before any mapping; check `getBoundingClientRect()` +
    computed style in the schema extractor.
 4. Workday-class portals don't render fields below certain viewport
    widths and use shadow DOM; extraction must record visibility state and
@@ -61,12 +61,12 @@ New tools in `src/tools.js` + `extension/background.js` +
 | `form_schema` | `tabId?` | `{fields: [{ref, kind, label, name, autocomplete, options?, compound?, required, visible}]} ` | Read-only. Enumerates inputs/selects/textareas + ARIA labels, fieldset legends, autocomplete tokens. Filters honeypots; reports `hidden_count`. |
 | `fill` | `ref`, `value`, `tabId?` | `{filled, verified, actual}` (`match_level` lands with fingerprinting, PARITY_SPEC Phase 2) | Native setter + bubbling events, then read-back verify. Trusted via CDP where possible. |
 | `select` | `ref`, `option`, `tabId?` | `{selected, actual, match_level}` | Match by label then value; error lists `available[]` labels. |
-| `apply_mapping` | `mapping: {ref: profileKey}`, `profile: str`, `tabId?` | `{filled: n, failed: [{ref, reason}], unmapped_keys: []}` | The privacy boundary — see below. |
+| `apply_mapping` | `mapping: {ref: profileKey}`, `profile: str`, `tabId?` | `{filled: n, failed: [{ref, reason}], unmapped_keys: []}` | The privacy boundary (see below). |
 | `list_profile_keys` | `profile: str` | `{keys: []}` | Names only, never values. |
 
 ## The PII boundary (core design point, from E-1/OpenJobAutofill)
 
-Profiles live in `chrome.storage.local` under the extension's origin —
+Profiles live in `chrome.storage.local` under the extension's origin:
 the model never sees values.
 
 ```
@@ -86,10 +86,10 @@ The agent emits only `{ref → profileKey}` mappings (e.g. `full_name`,
 `email`, `phone`). `profileKey` values are enumerated by a read-only
 `list_profile_keys` tool (names only, never values). If a field has no
 profile key, the agent may still `fill` it with literal text it generated
-(cover letter, screening answer) — that's the agent's own output, not
+(cover letter, screening answer), that's the agent's own output, not
 leaked PII.
 
-Profile editing UI (options page) is out of scope for the spec — schema
+Profile editing UI (options page) is out of scope for the spec: schema
 and storage format below are the deliverable.
 
 ## Requirements
@@ -108,7 +108,7 @@ and storage format below are the deliverable.
 ## Non-goals
 
 - Autonomous submit loops, CAPTCHA solving, login automation.
-- Resume parsing, cover-letter generation — that's agent-side work.
+- Resume parsing, cover-letter generation, that's agent-side work.
 - A bundled profile editor UI (v2; storage schema is specified so a
   community UI can be built).
 - Shadow-DOM piercing beyond best-effort (Workday known-hard).
@@ -132,6 +132,6 @@ extension. Reserved future keys: `_meta.created`, `_meta.source`.
 2. Multi-step wizards (Next → fill → Next): keep per-page `form_schema`
    calls, or a `wizard_step` helper that clicks Next and re-extracts?
    Lean: per-page calls, agent loops.
-3. Where do semantic locators (`--role/--name`) land — this spec or the
+3. Where do semantic locators (`--role/--name`) land, this spec or the
    general target-contract spec? Proposal: land the dual `ref|css`
    contract here, role/name in the broader selector work.

@@ -7,13 +7,13 @@ Guidance for AI coding agents working in this repository. Humans: see
 
 Two halves that talk over a localhost WebSocket:
 
-- **Bridge** (`src/`) — a Node MCP server (stdio) that also runs a WebSocket
+- **Bridge** (`src/`): a Node MCP server (stdio) that also runs a WebSocket
   server on `127.0.0.1:19223`. Any MCP client calls the tools; the bridge
   forwards each call to the extension and returns the reply. With the session
   cap at 1 (the default), a second client that finds the port busy attaches
   to the bridge already running. A higher cap, set by the person under
   Sesiones in the extension options, gives each new process the next port.
-- **Extension** (`extension/`) — an MV3 service worker that connects to the
+- **Extension** (`extension/`): an MV3 service worker that connects to the
   bridge as a WebSocket client and drives only user-attached tabs through
   `chrome.debugger` (Chrome DevTools Protocol). Attachments are session-scoped
   and bound to an exact origin.
@@ -50,9 +50,9 @@ npm run test:e2e               # Playwright suite, real Chrome + extension + bri
 Adding, renaming, or removing a tool means editing all three, or tests and
 runtime drift apart:
 
-1. `src/tools.js` — the `TOOLS` array (name, description, zod schema).
-2. `extension/background.js` — the `TOOLS` map (name → implementation).
-3. `test/tools.test.js` — the `EXPECTED_TOOLS` list.
+1. `src/tools.js`: the `TOOLS` array (name, description, zod schema).
+2. `extension/background.js`: the `TOOLS` map (name → implementation).
+3. `test/tools.test.js`: the `EXPECTED_TOOLS` list.
 
 The wire protocol is JSON both ways: bridge → extension `{id, tool, args}`,
 extension → bridge `{id, result}` or `{id, error: {message, error_code, remedy}}`.
@@ -83,13 +83,13 @@ is JSON-stringified into text.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and reports a `match_level`: `exact` (selector
   and fingerprint intact), `reidentified` (selector dead or pointing at a
-  different element, but tag+name match is unique — that candidate wins over
+  different element, but tag+name match is unique; that candidate wins over
   a drifted selector, by design), `stable` (selector resolves but the
-  fingerprint drifted — the action proceeds and reports the drift), or
+  fingerprint drifted, the action proceeds and reports the drift), or
   `stale_ref` when nothing matches. Keep `nameOf` identical between
   `SNAPSHOT_SCRIPT` and `REF_CHECK_SCRIPT`.
 - Page tools resolve through `resolveTabId`, which accepts only a user-attached
-  tab whose current origin matches its session attachment — exact match, or an
+  tab whose current origin matches its session attachment: exact match, or an
   origin in the `origin_allowlist` the bridge pushes from
   `~/.config/opencode-chrome/policy.json` (SSO redirects). The allowlist lives
   bridge-side only; the page can never reach it. Do not bypass this resolver

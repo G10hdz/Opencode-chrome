@@ -92,7 +92,7 @@ The same command works from another local MCP client. How many sessions run at o
 Declarative per-origin recipes live in `~/.config/opencode-chrome/adapters/`
 (env override: `OPENCODE_CHROME_ADAPTERS`). `list_recipes` enumerates them;
 `run_recipe(name, params?)` executes one on an attached tab. The adapter's
-`origin` must be inside the attachment's reach — exact match or allowlisted,
+`origin` must be inside the attachment's reach: exact match or allowlisted,
 same rule as SSO redirects and OOPIF frames.
 
 ```json
@@ -115,7 +115,7 @@ recipe only (auth/session setup), then it is removed.
 `{{key}}` placeholders come from `params`; inside `eval` each placeholder is
 substituted as a JSON-encoded literal (write `search({{q}})`, no quotes) so a
 param value can never break out of the script's context. The `eval` JS lives
-only in files you install — there is no free-form eval tool. See
+only in files you install: there is no free-form eval tool. See
 `examples/adapters/hackernews.json`.
 
 ## Tools
@@ -156,7 +156,7 @@ only in files you install — there is no free-form eval tool. See
 
 - Mutating tools (`navigate`, `click`, `hover`, `drag`, `type`, `fill`, `select`,
   `scroll`, `upload`, `apply_mapping`, `press_key`) accept `include_snapshot:true`
-  to return a fresh snapshot in the same response — its refs replace the
+  to return a fresh snapshot in the same response; its refs replace the
   previous ones.
 - Payload tools (`snapshot`, `find`, `read_text`, `screenshot`,
   `get_network_body`) accept `output_path` to write the payload to a file on the
@@ -212,7 +212,7 @@ npm run pack    # builds dist/opencode-chrome-<version>.zip for CWS upload
 # page end to end. Needs a Chrome binary; kept out of `npm test` for that reason.
 node scripts/e2e-smoke.mjs   # SMOKE_HEADLESS=1 for --headless=new
 
-# Playwright e2e suite (e2e/): same real path with broader coverage — tabs,
+# Playwright e2e suite (e2e/): same real path with broader coverage: tabs,
 # interactions, downloads, dialogs, network, guards. Also needs Chrome
 # (OPENCODE_CHROME_BIN overrides the lookup).
 npm run test:e2e
