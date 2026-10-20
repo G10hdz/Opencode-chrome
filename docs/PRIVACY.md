@@ -19,9 +19,11 @@ personal data to us. There is no backend and no analytics.
   browser session.
 
 Use of the `chrome.debugger` permission is limited to executing the
-documented tools (navigate, snapshot, click, type, screenshot, wait_for) in
-a tab the user explicitly attached, and the debugger detaches automatically
-after 30 seconds idle.
+documented tool set in a tab the user explicitly attached: navigating and
+reading page structure and text; clicking, typing and filling forms;
+screenshots; network, console and storage-key inspection; environment
+emulation; dialogs; downloads. The debugger detaches automatically after
+30 seconds idle.
 
 ## Español
 
@@ -41,7 +43,9 @@ transmiten datos personales a nadie. No hay backend ni analítica.
   exactos de pestañas adjuntas viven en `chrome.storage.session` y se borran
   con la sesión del navegador.
 
-El uso del permiso `chrome.debugger` se limita a ejecutar las herramientas
-documentadas (navigate, snapshot, click, type, screenshot, wait_for) en una
-pestaña que el usuario adjuntó explícitamente; el debugger se desacopla tras 30
-segundos de inactividad.
+El uso del permiso `chrome.debugger` se limita a ejecutar el conjunto de
+herramientas documentadas en una pestaña que el usuario adjuntó
+explícitamente: navegar y leer estructura y texto de la página; hacer clic,
+escribir y llenar formularios; capturas; inspección de red, consola y
+nombres de claves de almacenamiento; emulación de entorno; diálogos;
+descargas. El debugger se desacopla tras 30 segundos de inactividad.
