@@ -1,6 +1,6 @@
 # opencode-chrome Architecture
 
-Status: Proposed  
+Status: Implemented in v0.2.0  
 Target: v0.2  
 Last updated: 2026-08-22
 
@@ -80,6 +80,9 @@ flowchart LR
 
 No browser content goes to a project backend. Tool results return through
 OpenCode and may be sent to the model provider selected by the user.
+
+A rendered overview of this architecture lives in
+[diagrams/architecture.html](diagrams/architecture.html).
 
 ## State ownership
 
