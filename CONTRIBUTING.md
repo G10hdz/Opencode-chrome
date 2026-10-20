@@ -40,7 +40,27 @@ The tool contract lives in three files that must stay in sync:
 3. `test/tools.test.js` — the `EXPECTED_TOOLS` list, plus a test if the tool
    has real behavior.
 
+If the tool grows what `chrome.debugger` can do, check the permission
+justifications in `docs/STORE_LISTING.md` still describe the surface.
+
 Run `npm test` before pushing.
+
+## Release
+
+The version lives in four places that must move together: `package.json`,
+`package-lock.json` (`npm version <v> --no-git-tag-version` covers both),
+`extension/manifest.json`, and the `McpServer` call in `src/index.js`.
+Missing one ships a bridge or extension that reports a different version
+than npm.
+
+1. Bump on a `chore/` branch and merge.
+2. `npm publish` — needs `npm login` and a 2FA code; `prepublishOnly`
+   runs `npm test` first.
+3. `git tag -a v<version>` and push the tag.
+4. `npm run pack`, then create the GitHub release attaching
+   `dist/opencode-chrome-<version>.zip`.
+5. Chrome Web Store: upload that same zip with the texts from
+   `docs/STORE_LISTING.md`.
 
 ## Icons
 
