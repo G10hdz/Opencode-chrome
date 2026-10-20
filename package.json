@@ -32,7 +32,7 @@
     "test:e2e": "playwright test --config=e2e/playwright.config.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

@@ -43,7 +43,7 @@ no analytics.
 
 ## Requirements
 
-- Node 18 or newer
+- Node 20 or newer
 - Google Chrome (or Chromium) 116 or newer
 - opencode (or any MCP client that launches a local stdio server)
 
@@ -264,7 +264,7 @@ backend, sin cuentas, sin analítica.
 
 ## Requisitos
 
-- Node 18 o superior
+- Node 20 o superior
 - Google Chrome (o Chromium) 116 o superior
 - opencode (o cualquier cliente MCP que lance un servidor stdio local)
 
