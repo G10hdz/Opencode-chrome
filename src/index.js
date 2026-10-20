@@ -528,7 +528,7 @@ function serve(server) {
 });
 }
 
-const server = new McpServer({ name: "opencode-chrome", version: "0.1.1" });
+const server = new McpServer({ name: "opencode-chrome", version: "0.2.0" });
 
 function releaseListener() {
   rejectPending("MCP client disconnected.");
