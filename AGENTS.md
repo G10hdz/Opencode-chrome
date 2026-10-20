@@ -121,7 +121,7 @@ If a change touches any of these, call it out explicitly in the PR.
 - Each product or architecture spec gets its own branch and pull request.
 - Each delegated task is delivered as one atomic commit that includes its
   implementation and tests.
-- ES modules, Node 18+, no transpiler.
+- ES modules, Node 20+, no transpiler.
 - Keep dependencies minimal. The runtime deps are `@modelcontextprotocol/sdk`,
   `ws`, and `zod`. Don't add one for something a few lines can do.
 - Tests use `node:test` and a fake extension over WebSocket; they must keep
