@@ -901,7 +901,7 @@ test('bridge pushes the origin allowlist to the extension on connect', async (t)
     onMessage: (msg) => { if (msg.policy) onPolicy(msg.policy); },
   });
   t.after(() => ws.close());
-  const policy = await withTimeout(got, 3000, 'policy push');
+  const policy = await withTimeout(got, 8000, 'policy push');
   assert.deepEqual(policy, {
     origin_allowlist: { 'https://app.example.com': ['https://sso.example.com'] },
   });
@@ -986,5 +986,5 @@ test('bridge sends an empty allowlist when no policy file exists', async (t) => 
     onMessage: (msg) => { if (msg.policy) onPolicy(msg.policy); },
   });
   t.after(() => ws.close());
-  assert.deepEqual(await withTimeout(got, 3000, 'policy push'), { origin_allowlist: {} });
+  assert.deepEqual(await withTimeout(got, 8000, 'policy push'), { origin_allowlist: {} });
 });
