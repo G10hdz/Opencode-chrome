@@ -25,9 +25,11 @@ unpacked or zipped for the Chrome Web Store.
 
 ```
 src/index.js        MCP server + WebSocket server, token auth, request routing
+src/chat.js         side-panel chat agent loop: provider calls, write-gate
 src/tools.js        tool names, descriptions, zod schemas (the MCP surface)
 extension/background.js   service worker: WS client + CDP tool implementations
 extension/policy.js       pure exact-origin and attached-tab policy helpers
+extension/sidepanel.*     chat UI terminal; renders chat_* frames only
 extension/options.js/html token pairing UI
 test/tools.test.js  node:test suite (spawns the bridge, fakes the extension)
 test/extension-policy.test.js pure attached-tab policy tests
@@ -80,6 +82,12 @@ is JSON-stringified into text.
   Above one session it fails with `downloads_not_isolated` instead of
   returning a file from another session. One session still returns the
   latest download.
+- Chat frames (`{chat, chat_answer, chat_cancel}` in, `chat_*` out) ride
+  the authenticated extension socket as a second namespace; peers are
+  rejected. The agent loop and the provider key live bridge-side in
+  `~/.config/opencode-chrome/chat.json` (0600), never in the extension or
+  the page. Chat mutations pause on a `chat_confirm` write-gate in the
+  side panel; reads do not ask.
 - Refs from a snapshot carry a fingerprint; `resolveRef` re-checks the
   element before click/type and reports a `match_level`: `exact` (selector
   and fingerprint intact), `reidentified` (selector dead or pointing at a

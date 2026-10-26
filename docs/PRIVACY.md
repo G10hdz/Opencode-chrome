@@ -11,6 +11,10 @@ personal data to us. There is no backend and no analytics.
   tools are sent from your browser to the local bridge, and from there into
   the MCP client (opencode) you configured, which handles them according to
   your model provider's terms. We never see them.
+- If you use the optional side-panel chat, the bridge sends tool results
+  (page content) to the model provider configured in
+  `~/.config/opencode-chrome/chat.json`, under your own API key. The key
+  stays on your machine and never reaches the extension or the page.
 - The bridge binds to `127.0.0.1` only, rejects non-extension WebSocket
   origins, and requires a shared token between the bridge and the extension.
   The only data stored persistently is that token, in `chrome.storage.local`
@@ -36,6 +40,11 @@ transmiten datos personales a nadie. No hay backend ni analítica.
   procesan las herramientas van del navegador al puente local y de ahí al
   cliente MCP (opencode) que configuraste, que los trata según los términos
   de tu proveedor de modelos. Nosotros nunca los vemos.
+- Si usas el chat opcional del panel lateral, el puente manda los
+  resultados de las herramientas (contenido de página) al proveedor de
+  modelos configurado en `~/.config/opencode-chrome/chat.json`, con tu
+  propia API key. La key se queda en tu máquina y nunca llega a la
+  extensión ni a la página.
 - El puente escucha únicamente en `127.0.0.1`, rechaza orígenes que no sean
   extensiones y exige un token compartido entre puente y extensión. Lo único
   que se guarda de forma persistente es ese token: en `chrome.storage.local`

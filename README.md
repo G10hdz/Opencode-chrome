@@ -118,6 +118,28 @@ param value can never break out of the script's context. The `eval` JS lives
 only in files you install: there is no free-form eval tool. See
 `examples/adapters/hackernews.json`.
 
+## Chat (side panel)
+
+An optional chat client lives in the Chrome side panel: you type, a model
+drives your attached tabs through the same tool surface. It works with no
+MCP client running. The key lives in the bridge, never in the extension:
+
+```json
+// ~/.config/opencode-chrome/chat.json  (chmod 600)
+{ "provider": "anthropic", "api_key": "sk-...", "model": "claude-sonnet-4-5" }
+```
+
+`provider` is `anthropic` or `openai` (any OpenAI-compatible endpoint: set
+`base_url` for OpenRouter, Ollama, Groq, etc.). Optional: `max_turns`,
+`max_minutes`, `max_tokens`. Env override: `OPENCODE_CHROME_CHAT`.
+
+Run `opencode-chrome --serve` for a chat-only bridge (no MCP stdio); the
+normal MCP-spawned bridge serves chat too. Attaching a tab opens the
+panel. Reads run directly; mutations pause on an approve/deny prompt in
+the panel. Page content reaches the model only through tool results,
+wrapped as untrusted data — same rules as an MCP client, the key and the
+loop just move into your bridge.
+
 ## Tools
 
 | Tool | What it does |
@@ -287,6 +309,13 @@ backend, sin cuentas, sin analítica.
    adjuntar esa pestaña y luego pídele cosas.
 
 El mismo comando sirve para otro cliente MCP local. Cuántas sesiones corren a la vez se define en las opciones de la extensión, en Sesiones. Queda en una hasta que lo cambies.
+
+Chat opcional en el panel lateral: configurá
+`~/.config/opencode-chrome/chat.json` (provider `anthropic` u `openai`,
+api_key, model) y corré `opencode-chrome --serve` o el puente MCP de
+siempre. Al adjuntar un tab se abre el panel; las lecturas corren directo
+y cada mutación pide aprobación ahí mismo. La key queda en el puente, no
+en la extensión.
 
 Herramientas, notas de seguridad, solución de problemas y desarrollo: ver
 sección en inglés arriba (mismo contenido). Para contribuir:

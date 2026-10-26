@@ -57,6 +57,15 @@ profiles (values in `profiles.<name>` never leave the tab);
 `chrome.storage.session` keeps attached tab ids and their exact origins,
 cleared with the browser session.
 
+## sidePanel permission justification
+
+The side panel hosts the optional chat client: the user types, the local
+bridge runs the agent loop and calls the user's own model provider with
+the key in `~/.config/opencode-chrome/chat.json` (never stored in the
+extension). Mutations proposed by the model pause on an in-panel
+approval. The panel renders only what the bridge returns; it holds no
+keys and runs no remote code.
+
 ## Description (detailed)
 
 opencode-chrome connects your terminal AI coding agent (opencode) to your
@@ -65,7 +74,7 @@ admin panels, your local dev servers.
 
 How it works: a tiny local bridge (`npx opencode-chrome`, MCP server) +
 this extension. No backend, no accounts, no analytics. Your model keys stay
-in your opencode config (BYOK).
+in your opencode config or `chat.json` (BYOK).
 
 Tools: tab management, navigation, page snapshots and text extraction,
 trusted input (click, type, fill, upload), form autofill from local
