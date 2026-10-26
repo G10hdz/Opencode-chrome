@@ -4,7 +4,7 @@
   "name": "opencode-chrome",
   "version": "0.2.0",
   "description": "Let opencode drive your real Chrome via a local MCP bridge (chrome.debugger/CDP). Unofficial, BYOK.",
-  "permissions": ["alarms", "debugger", "downloads", "storage", "tabs"],
+  "permissions": ["alarms", "debugger", "downloads", "storage", "tabs", "sidePanel"],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -20,6 +20,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "options_ui": {
     "page": "options.html",

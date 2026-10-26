@@ -36,15 +36,19 @@ product must make the controlled tab and each mutation visible to the user.
 1. Use the user's normal Chrome profile, cookies, sessions, and extensions.
 2. Make attaching the current tab a single explicit browser action.
 3. Fail closed when a tab, origin, document, or referenced element changes.
-4. Require OpenCode approval before every browser mutation.
+4. Require user approval before every browser mutation: OpenCode
+   permissions for MCP clients, the side-panel write-gate for chat.
 5. Support the small interaction surface needed for forms and web debugging.
-6. Keep all transport local with no backend, analytics, or bundled model.
+6. Keep all transport local with no backend or analytics.
 7. Work with any model supported by OpenCode.
+8. Offer a side-panel chat that drives attached tabs through a
+   user-configured provider key kept in the bridge (`CHAT_SPEC.md`).
 
 ## Non-goals
 
 - General scraping, crawling, or unattended browser farms.
-- A side-panel chat client or a replacement for the OpenCode UI.
+- Replacing the OpenCode UI for people driving the bridge through an MCP
+  client; the chat is a standalone BYOK client, not a front for one.
 - Automatic detection of every dangerous button on arbitrary websites.
 - Raw JavaScript, unrestricted CDP, cookie export, or response-body capture.
 - Scheduled or background execution of consequential actions.

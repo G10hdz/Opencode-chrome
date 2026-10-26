@@ -143,6 +143,8 @@ erDiagram
 | Snapshot/ref store | Page representation, snapshot identity, ref revalidation | snapshots by tab | snapshot and resolve ref |
 | Diagnostics | Redacted bounded console/network ring buffers | entries by tab | query and clear diagnostics |
 | Options UI | Pairing token and safety guidance | token | Chrome options page |
+| Chat agent loop | Provider calls, tool dispatch, write-gate | history per extension socket | `chat_*` frames |
+| Side panel | Chat UI and confirm prompts | none | `chrome.runtime` Port relay |
 
 These are ownership boundaries, not a requirement to create one file per row.
 The first implementation should extract a module only when doing so makes the
@@ -331,6 +333,24 @@ sequenceDiagram
   raw headers.
 - Consequences: Enough evidence for common frontend failures without becoming a
   traffic recorder. Payload inspection remains out of scope.
+
+### ADR-006: The chat agent loop lives in the bridge, not the extension
+
+- Status: Accepted.
+- Context: A side-panel chat needs a model, tool dispatch and a write-approval
+  gate. MV3 service workers can be suspended mid-loop, and a key kept in
+  `chrome.storage` would sit inside the same origin as untrusted page data.
+  MCP sampling could have delegated completions to the client, but opencode
+  does not implement it and the spec deprecated it in 2026-07-28.
+- Decision: Run the agent loop and provider calls in the bridge
+  (`src/chat.js`) with the key in `~/.config/opencode-chrome/chat.json`.
+  The panel is a dumb terminal over the existing authenticated socket;
+  mutations pause on an in-panel confirm.
+- Consequences: Chat works with no MCP client (`--serve`). No key or prompt
+  surface enters the extension. The write-gate answers the PARITY_SPEC open
+  question for the chat surface only; MCP clients keep their own approvals.
+- Alternatives: A provider call from the service worker duplicates the loop
+  in a killable context and stores secrets under page reach.
 
 ## Dependency analysis
 

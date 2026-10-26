@@ -7,8 +7,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import WebSocket, { WebSocketServer } from "ws";
 import { registerTools, outputToFile } from "./tools.js";
+import { ChatSession } from "./chat.js";
 import { parseSessionConfig, sessionPorts, DEFAULT_PORT, clampPort } from "./sessions.js";
 import { spawnSync } from "node:child_process";
+
+// --serve: solo el WS server + chat del side panel, sin transporte MCP stdio.
+const SERVE = process.argv.includes("--serve");
 
 // default 19223: 9223 is often taken by Electron --remote-debugging-port (OpenWork, etc.)
 // bridgePort es el puerto de ESTE proceso. Con el tope en 1 es el de siempre.
@@ -176,6 +180,7 @@ console.error(
 );
 
 let socket = null;
+let activeChat = null;
 let nextId = 1;
 const pending = new Map();
 // otros procesos MCP (otro agente) que comparten este puente
@@ -255,6 +260,19 @@ function attachPeer(ws) {
     try {
       msg = JSON.parse(data.toString());
     } catch {
+      return;
+    }
+    if (msg && (msg.chat || msg.chat_answer || msg.chat_cancel)) {
+      // chat es solo de la extensión: un peer no tiene side panel ni humano al otro lado
+      if (ws.readyState === WebSocket.OPEN)
+        ws.send(
+          JSON.stringify({
+            chat_error: {
+              id: typeof msg.chat?.id === "number" ? msg.chat.id : null,
+              message: "chat is only available on the Chrome extension connection",
+            },
+          })
+        );
       return;
     }
     if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
@@ -479,6 +497,15 @@ function serve(server) {
     socket.terminate();
   }
   socket = ws;
+  // chat del side panel: mismo socket autenticado, namespace aparte del de tools
+  activeChat?.dispose(); // el socket viejo no arrastra un loop en marcha
+  const chat = new ChatSession({
+    send: (frame) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+    },
+    callTool: callToolForChat,
+  });
+  activeChat = chat;
   // la policy se empuja en cada conexión: una reconexión con otro bridge resetea la allowlist
   const name = sessionName();
   ws.send(
@@ -504,6 +531,10 @@ function serve(server) {
       console.error(`opencode-chrome: sessions ${saved.sessions} from port ${saved.port}`);
       return;
     }
+    if (msg && (msg.chat || msg.chat_answer || msg.chat_cancel)) {
+      chat.handle(msg);
+      return;
+    }
     const entry = pending.get(msg?.id);
     if (!entry) return;
     pending.delete(msg.id);
@@ -521,6 +552,8 @@ function serve(server) {
     clearInterval(keepalive);
     if (socket === ws) {
       socket = null;
+      if (activeChat === chat) activeChat = null;
+      chat.dispose();
       rejectPending("Chrome extension disconnected mid-call; retry once it reconnects.");
     }
   });
@@ -541,7 +574,8 @@ function releaseListener() {
 
 // Sin peers, el listener no sobrevive al cliente stdio: suelta el puerto.
 // Con peers, el primer cliente puede irse y los otros siguen usando la extensión.
-process.stdin.once("end", () => {
+// En --serve no hay cliente stdio: el proceso vive hasta que lo maten.
+if (!SERVE) process.stdin.once("end", () => {
   stdioClosed = true;
   if (peerMode) {
     for (const entry of peerPending.values()) {
@@ -562,7 +596,19 @@ process.stdin.once("end", () => {
   }
   if (peers.size === 0) releaseListener();
   else rejectPending("MCP client disconnected.");
-});
+}); // end stdin end handler (MCP mode only)
+
+// El loop de chat reutiliza handleTool (mismos gates, mismos envelopes) y
+// aplana el resultado MCP a {text, isError} para el historial del modelo.
+async function callToolForChat(tool, args) {
+  const res = await handleTool(tool, args);
+  const parts = [];
+  for (const c of res?.content ?? []) {
+    if (c.type === "text") parts.push(c.text);
+    else if (c.type === "image") parts.push("[image not forwarded to the model]");
+  }
+  return { text: parts.join("\n"), isError: res?.isError === true };
+}
 
 async function handleTool(tool, args) {
   try {
@@ -617,5 +663,9 @@ async function handleTool(tool, args) {
 }
 
 await bound;
-registerTools(server, (tool, args) => (peerMode ? callPeer(tool, args) : handleTool(tool, args)));
-await server.connect(new StdioServerTransport());
+if (SERVE) {
+  console.error("opencode-chrome: serve mode, no MCP stdio; chat only via the extension side panel");
+} else {
+  registerTools(server, (tool, args) => (peerMode ? callPeer(tool, args) : handleTool(tool, args)));
+  await server.connect(new StdioServerTransport());
+}

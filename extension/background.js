@@ -104,6 +104,11 @@ function dispatch(socket, port, ev, touch) {
     refreshBadges().catch(() => {}); // un tab en origen allowlisted pasa a "on"
     return;
   }
+  // frames del chat del side panel: el bridge los emite, el panel los renderiza
+  if (msg && (msg.chat_delta || msg.chat_tool || msg.chat_confirm || msg.chat_done || msg.chat_error)) {
+    panelPort?.postMessage(msg);
+    return;
+  }
   if (!msg || typeof msg.id !== "number" || typeof msg.tool !== "string") return;
   handle(msg.tool, tagCall(msg.args || {}, port))
     .then((result) => send(socket, { id: msg.id, result }))
@@ -289,6 +294,69 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
+// --- chat side panel relay ---
+// El panel es solo UI: sus frames {chat|chat_answer|chat_cancel} van al socket
+// del puente que posee el tab, y los chat_* del puente vuelven por dispatch().
+let panelPort = null;
+let chatSocket = null;
+
+async function socketForChat(tabId) {
+  let target = ws;
+  if (sessionCount > 1 && typeof tabId === "number") {
+    const { [ATTACHMENTS]: all = {} } = await chrome.storage.session.get(ATTACHMENTS);
+    const owner = all[String(tabId)]?.port;
+    const lane = Number.isInteger(owner) ? lanes.get(owner) : null;
+    if (lane) target = lane;
+  }
+  return target && target.readyState === WebSocket.OPEN ? target : null;
+}
+
+async function chatContext() {
+  const { [ATTACHMENTS]: all = {} } = await chrome.storage.session.get(ATTACHMENTS);
+  const tabs = [];
+  for (const [id, entry] of Object.entries(all)) {
+    const tab = await chrome.tabs.get(Number(id)).catch(() => null);
+    if (tab && attachedTab({ [id]: entry }, tab.id, tab.url, originAllowlist))
+      tabs.push({ id: tab.id, title: tab.title ?? "", url: tab.url ?? "", port: entry?.port ?? basePort });
+  }
+  return { chat_context: { tabs } };
+}
+
+chrome.runtime.onConnect?.addListener((p) => {
+  if (p.name !== "opencode-chat") return;
+  panelPort = p;
+  p.onDisconnect.addListener(() => {
+    if (panelPort === p) panelPort = null;
+    // panel cerrado: cancelar el turno en curso para no quemar tokens a ciegas
+    if (chatSocket && chatSocket.readyState === WebSocket.OPEN)
+      chatSocket.send(JSON.stringify({ chat_cancel: {} }));
+    chatSocket = null;
+  });
+  p.onMessage.addListener((msg) => {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.chat_init) {
+      chatContext().then((c) => p.postMessage(c)).catch(() => {});
+      return;
+    }
+    if (msg.chat || msg.chat_answer || msg.chat_cancel) {
+      socketForChat(msg.chat?.tabId).then((socket) => {
+        if (socket) {
+          if (msg.chat) chatSocket = socket;
+          socket.send(JSON.stringify(msg));
+        } else {
+          p.postMessage({
+            chat_error: {
+              id: typeof msg.chat?.id === "number" ? msg.chat.id : null,
+              message: "bridge not connected; start the MCP bridge or run `opencode-chrome --serve`",
+            },
+          });
+        }
+      });
+    }
+  });
+  chatContext().then((c) => p.postMessage(c)).catch(() => {});
+});
+
 chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
@@ -395,6 +463,7 @@ async function toggleAttachment(ownerPort) {
     const key = String(tab.id);
     const port = Number.isInteger(ownerPort) ? ownerPort : basePort;
     const visible = visibleAttachments(attachments, sessionCount > 1 ? port : null);
+    let attached = false;
     if (attachedTab(visible, tab.id, tab.url, originAllowlist)) delete attachments[key];
     else {
       const origin = exactOrigin(tab.url);
@@ -403,9 +472,15 @@ async function toggleAttachment(ownerPort) {
       const entry = { origin, attachedAt: Date.now() };
       if (sessionCount > 1) entry.port = port;
       attachments[key] = entry;
+      attached = true;
     }
     await chrome.storage.session.set({ [ATTACHMENTS]: attachments });
     await refreshBadges();
+    // attach = "quiero trabajar este tab": abre el panel de chat de una vez
+    if (attached && typeof chrome.sidePanel?.open === "function")
+      chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+    // avisar al panel para que refresque su contexto aunque ya estuviera abierto
+    if (panelPort) chatContext().then((c) => panelPort?.postMessage(c)).catch(() => {});
   });
 }
 

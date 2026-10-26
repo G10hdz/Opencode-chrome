@@ -28,4 +28,9 @@ for (const size of ["16", "48", "128"]) {
   if (!icon) fail(`missing icon ${size}`);
   if (!existsSync(new URL(icon, dir))) fail(`icon file not found: ${icon}`);
 }
+if (manifest.side_panel?.default_path) {
+  if (!manifest.permissions?.includes("sidePanel")) fail("side_panel set without sidePanel permission");
+  if (!existsSync(new URL(manifest.side_panel.default_path, dir)))
+    fail(`side_panel file not found: ${manifest.side_panel.default_path}`);
+}
 console.log("manifest ok");
