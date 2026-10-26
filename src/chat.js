@@ -135,7 +135,10 @@ async function listModels(cfg) {
       : cfg.api_key
         ? { authorization: `Bearer ${cfg.api_key}` }
         : {};
-  const res = await fetch(`${cfg.base_url}/models`, {
+  // anthropic: base_url es solo el host (los mensajes ya agregan /v1);
+  // openai-compatible: la base ya trae /v1
+  const path = cfg.provider === "anthropic" ? "/v1/models" : "/models";
+  const res = await fetch(`${cfg.base_url}${path}`, {
     headers,
     signal: AbortSignal.timeout(15_000),
   });
@@ -329,18 +332,30 @@ async function* streamAnthropic(cfg, messages, signal) {
     } catch {
       continue;
     }
-    if (ev.event === "content_block_start" && data.content_block?.type === "tool_use") {
-      acc = { id: data.content_block.id, name: data.content_block.name, json: "" };
+    if (ev.event === "content_block_start") {
+      const b = data.content_block;
+      if (b?.type === "tool_use") acc = { kind: "tool", id: b.id, name: b.name, json: "" };
+      // con thinking activado el bloque hay que devolverlo intacto en el
+      // siguiente request o anthropic responde 400
+      else if (b?.type === "thinking") acc = { kind: "thinking", thinking: "", signature: "" };
+      else if (b?.type === "redacted_thinking")
+        yield { type: "redacted_thinking", data: b.data };
     } else if (ev.event === "content_block_delta") {
       const d = data.delta;
       if (d?.type === "text_delta" && d.text) yield { type: "text", text: d.text };
-      else if (d?.type === "input_json_delta" && acc) acc.json += d.partial_json ?? "";
+      else if (d?.type === "input_json_delta" && acc?.kind === "tool") acc.json += d.partial_json ?? "";
+      else if (d?.type === "thinking_delta" && acc?.kind === "thinking") acc.thinking += d.thinking ?? "";
+      else if (d?.type === "signature_delta" && acc?.kind === "thinking") acc.signature += d.signature ?? "";
     } else if (ev.event === "content_block_stop" && acc) {
-      let input = {};
-      try {
-        input = JSON.parse(acc.json || "{}");
-      } catch {}
-      yield { type: "tool_use", id: acc.id, name: acc.name, input };
+      if (acc.kind === "thinking") {
+        yield { type: "thinking", thinking: acc.thinking, signature: acc.signature };
+      } else {
+        let input = {};
+        try {
+          input = JSON.parse(acc.json || "{}");
+        } catch {}
+        yield { type: "tool_use", id: acc.id, name: acc.name, input };
+      }
       acc = null;
     } else if (ev.event === "message_stop") {
       return;
@@ -613,6 +628,10 @@ export class ChatSession {
             this.emit({ chat_delta: { id, text: ev.text } });
           } else if (ev.type === "tool_use") {
             calls.push(ev);
+            blocks.push(ev);
+          } else if (ev.type === "thinking" || ev.type === "redacted_thinking") {
+            // quedan en el historial del assistant para el siguiente request;
+            // anthropicMessages los pasa tal cual y openaiMessages los ignora
             blocks.push(ev);
           }
         }

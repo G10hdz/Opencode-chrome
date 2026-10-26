@@ -95,7 +95,12 @@ async function fakeProvider(t, script) {
 
 const sse = (res, chunks) => {
   res.writeHead(200, { 'content-type': 'text/event-stream' });
-  for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+  for (const c of chunks) {
+    // anthropic manda `event:` por chunk; openai solo data. Sin la línea
+    // event, el parser de anthropic no recibe nada y el test es vacío.
+    if (c?.type) res.write(`event: ${c.type}\n`);
+    res.write(`data: ${JSON.stringify(c)}\n\n`);
+  }
   res.end('data: [DONE]\n\n');
 };
 
@@ -587,6 +592,56 @@ test('effort maps to a thinking budget in the anthropic request', async (t) => {
   await ext.next(isChat('chat_done'));
 });
 
+test('anthropic thinking blocks are preserved into the next request after a tool call', async (t) => {
+  const provider = await fakeProvider(t, [
+    (_req, res) =>
+      sse(res, [
+        { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-abc' } },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_2', name: 'list_tabs', input: {} },
+        },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_stop' },
+      ]),
+    (req, res) => {
+      const asst = req.body.messages.find((m) => m.role === 'assistant');
+      // anthropic 400 si el thinking block no vuelve antes del tool_use
+      assert.equal(asst.content[0].type, 'thinking');
+      assert.equal(asst.content[0].thinking, 'hmm');
+      assert.equal(asst.content[0].signature, 'sig-abc');
+      sse(res, [
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_stop' },
+      ]);
+    },
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  writeFileSync(
+    chatFile,
+    JSON.stringify({
+      provider: 'anthropic',
+      base_url: `http://127.0.0.1:${provider.port}`,
+      api_key: API_KEY,
+      model: 'claude-fake',
+      effort: 'low',
+    })
+  );
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat: { id: 9, text: 'hi' } });
+  await ext.next(isChat('chat_done'));
+});
+
 test('listModels puts free models first (unit)', async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => {
@@ -615,6 +670,25 @@ test('listModels puts free models first (unit)', async (t) => {
   );
   assert.ok(models[0].free && models[1].free && models[2].free);
   assert.ok(!models[3].free);
+});
+
+test('listModels hits /v1/models for anthropic (unit)', async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  let url = null;
+  globalThis.fetch = async (u) => {
+    url = u;
+    return new Response(JSON.stringify({ data: [{ id: 'claude-x' }] }), { status: 200 });
+  };
+  const models = await listModels({
+    provider: 'anthropic',
+    base_url: 'https://api.anthropic.com',
+    api_key: 'k',
+  });
+  assert.equal(url, 'https://api.anthropic.com/v1/models');
+  assert.equal(models[0].id, 'claude-x');
 });
 
 test('privacyFor flags known hosts and defaults to unknown (unit)', () => {
