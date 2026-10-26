@@ -53,7 +53,13 @@ New namespaced frames on the existing authenticated socket:
 - bridge→ext `{chat_confirm: {id, tool, args, prompt}}`: write-gate;
   the loop pauses until the user answers.
 - ext→bridge `{chat_answer: {id, approved}}`, `{chat_cancel: {id}}`.
-- bridge→ext `{chat_done: {id}}`, `{chat_error: {id, message}}`.
+- ext→bridge `{chat_models: {provider?, base_url?, api_key?}}` asks the
+  bridge to list provider models; overrides are used in memory only.
+- ext→bridge `{chat_config: {provider, base_url?, api_key?, model,
+  effort?}}` merges into chat.json and persists it (0600).
+- bridge→ext `{chat_done: {id}}`, `{chat_error: {id, message}}`,
+  `{chat_models: {models, configured, privacy, error?}}`,
+  `{chat_config: {ok, provider, model, effort, has_key, privacy}}`.
 
 Chat frames are accepted only on the extension socket; peers get
 `chat_error`. Tool calls issued by the loop reuse the existing
@@ -61,10 +67,19 @@ Chat frames are accepted only on the extension socket; peers get
 
 ### 3. Agent loop (bridge, `src/chat.js`)
 
-- Config at `~/.config/opencode-chrome/chat.json` (mode 0600,
-  user-authored, same trust class as the token and policy.json):
-  `{provider, base_url, api_key, model, max_turns?}`. Missing or invalid
-  file → `chat_error` with `chat_not_configured` and a remedy.
+- Config at `~/.config/opencode-chrome/chat.json` (mode 0600, same trust
+  class as the token and policy.json):
+  `{provider, base_url, api_key, model, effort?, max_turns?}`. Missing or
+  invalid file → `chat_error` with `chat_not_configured` and a remedy.
+  The panel can also edit it: `{chat_config}` merges into the file (an
+  omitted `api_key` keeps the stored one) and `{chat_models}` lists
+  `GET {base}/models` sorted free-first (zero-priced and local models
+  first). Each reply carries a `privacy` note keyed on the endpoint host
+  (no-training / conditional / free-tier-trains / local / unknown) so the
+  panel can show the data-retention posture before the user types
+  sensitive data.
+- `effort` (`off|low|medium|high`) maps to `reasoning_effort` on
+  OpenAI-compatible endpoints and a `thinking` budget on Anthropic.
 - Providers for v1: `anthropic` (POST `/v1/messages`, SSE) and
   `openai` (POST `/chat/completions`, SSE; covers OpenAI, OpenRouter,
   Ollama, Groq). Raw `fetch` plus a small SSE parser; no new dependency.

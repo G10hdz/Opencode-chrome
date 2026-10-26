@@ -6,8 +6,21 @@
     <style>
       * { box-sizing: border-box; }
       body { font: 13px system-ui, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-      #ctx { padding: 0.4rem 0.75rem; font-size: 12px; color: #555; border-bottom: 1px solid #e0e0e0; }
+      #ctx { padding: 0.4rem 0.75rem; font-size: 12px; color: #555; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 0.4rem; }
+      #ctx span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #ctx b { color: #222; }
+      #gear { border: 0; background: none; font-size: 15px; padding: 0.15rem 0.3rem; cursor: pointer; }
+      #settings { border-bottom: 1px solid #e0e0e0; padding: 0.6rem 0.75rem; background: #fafafa; display: none; }
+      #settings.open { display: block; }
+      #settings label { display: block; font-size: 11px; color: #555; margin: 0.45rem 0 0.15rem; }
+      #settings input, #settings select { width: 100%; border: 1px solid #d0d0d0; border-radius: 6px; padding: 0.35rem 0.5rem; font: inherit; }
+      #settings .row { display: flex; gap: 0.5rem; }
+      #settings .row > div { flex: 1; }
+      #privacy { font-size: 11px; margin: 0.45rem 0 0; padding: 0.35rem 0.5rem; border-radius: 6px; background: #eef4ff; color: #333; display: none; }
+      #privacy.warn { background: #fff3e0; }
+      #privacy.bad { background: #ffebee; }
+      #cfgstatus { font-size: 11px; color: #555; margin-top: 0.4rem; min-height: 1em; }
+      .free-tag { color: #2e7d32; }
       #log { flex: 1; overflow-y: auto; padding: 0.5rem 0.75rem; }
       .msg { margin: 0 0 0.5rem; white-space: pre-wrap; word-wrap: break-word; }
       .user { background: #e8f0fe; border-radius: 8px; padding: 0.4rem 0.6rem; }
@@ -25,10 +38,42 @@
       button:hover { background: #f2f2f2; }
       button:disabled { opacity: 0.5; cursor: default; }
       .muted { color: #888; font-size: 12px; }
+      #savecfg { width: 100%; margin-top: 0.5rem; }
+      #loadmodels { padding: 0.35rem 0.6rem; font-size: 12px; }
     </style>
   </head>
   <body>
-    <div id="ctx">attach a tab with the extension icon to start</div>
+    <div id="ctx"><span id="ctxtext">attach a tab with the extension icon to start</span><button id="gear" title="Chat settings">⚙</button></div>
+    <div id="settings">
+      <div class="row">
+        <div>
+          <label>Provider</label>
+          <select id="provider">
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI-compatible</option>
+          </select>
+        </div>
+        <div>
+          <label>Effort</label>
+          <select id="effort">
+            <option value="off">off</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+      </div>
+      <label>API key (saved in the bridge's chat.json, never in the extension)</label>
+      <input id="apikey" type="password" placeholder="sk-…" autocomplete="off" />
+      <label>Base URL (optional — OpenRouter, Ollama, Groq, proxies)</label>
+      <input id="baseurl" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
+      <label>Model <button id="loadmodels" type="button">load list</button></label>
+      <input id="model" list="modellist" placeholder="pick or type a model id" autocomplete="off" />
+      <datalist id="modellist"></datalist>
+      <div id="privacy"></div>
+      <button id="savecfg" type="button">Save</button>
+      <div id="cfgstatus"></div>
+    </div>
     <div id="log"></div>
     <div id="bar">
       <textarea id="input" rows="2" placeholder="Tell it what to do…"></textarea>
