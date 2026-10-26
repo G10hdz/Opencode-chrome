@@ -105,7 +105,16 @@ function dispatch(socket, port, ev, touch) {
     return;
   }
   // frames del chat del side panel: el bridge los emite, el panel los renderiza
-  if (msg && (msg.chat_delta || msg.chat_tool || msg.chat_confirm || msg.chat_done || msg.chat_error)) {
+  if (
+    msg &&
+    (msg.chat_delta ||
+      msg.chat_tool ||
+      msg.chat_confirm ||
+      msg.chat_done ||
+      msg.chat_error ||
+      msg.chat_models ||
+      msg.chat_config)
+  ) {
     panelPort?.postMessage(msg);
     return;
   }
@@ -338,7 +347,7 @@ chrome.runtime.onConnect?.addListener((p) => {
       chatContext().then((c) => p.postMessage(c)).catch(() => {});
       return;
     }
-    if (msg.chat || msg.chat_answer || msg.chat_cancel) {
+    if (msg.chat || msg.chat_answer || msg.chat_cancel || msg.chat_models || msg.chat_config) {
       socketForChat(msg.chat?.tabId).then((socket) => {
         if (socket) {
           if (msg.chat) chatSocket = socket;

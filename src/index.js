@@ -262,7 +262,7 @@ function attachPeer(ws) {
     } catch {
       return;
     }
-    if (msg && (msg.chat || msg.chat_answer || msg.chat_cancel)) {
+    if (msg && (msg.chat || msg.chat_answer || msg.chat_cancel || msg.chat_models || msg.chat_config)) {
       // chat es solo de la extensión: un peer no tiene side panel ni humano al otro lado
       if (ws.readyState === WebSocket.OPEN)
         ws.send(
@@ -531,7 +531,14 @@ function serve(server) {
       console.error(`opencode-chrome: sessions ${saved.sessions} from port ${saved.port}`);
       return;
     }
-    if (msg && (msg.chat || msg.chat_answer || msg.chat_cancel)) {
+    if (
+      msg &&
+      (msg.chat ||
+        msg.chat_answer ||
+        msg.chat_cancel ||
+        msg.chat_models ||
+        msg.chat_config)
+    ) {
       chat.handle(msg);
       return;
     }

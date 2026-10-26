@@ -3,9 +3,9 @@
 // y despacha tool calls por el mismo camino que las tools MCP. La API key vive
 // solo aquí: nunca cruza el WS ni aparece en errores.
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { TOOLS } from "./tools.js";
 
@@ -19,6 +19,9 @@ const BASE_URLS = {
 };
 
 const CONFIRM_TIMEOUT_MS = 120_000;
+
+// effort del panel → thinking budget (anthropic) / reasoning_effort (openai)
+const EFFORT_BUDGET = { low: 1024, medium: 4096, high: 16384 };
 
 // Todo lo que no está aquí puede mutar la página o el navegador: pide
 // confirmación en el panel antes de ejecutarse (write-gate, CHAT_SPEC).
@@ -47,6 +50,7 @@ const ConfigSchema = z.object({
   base_url: z.string().url().optional(),
   api_key: z.string().min(1),
   model: z.string().min(1),
+  effort: z.enum(["off", "low", "medium", "high"]).optional(),
   max_turns: z.number().int().min(1).max(200).optional(),
   max_minutes: z.number().positive().max(120).optional(),
   max_tokens: z.number().int().positive().optional(),
@@ -73,6 +77,84 @@ function loadConfig() {
   const cfg = parsed.data;
   cfg.base_url = (cfg.base_url || BASE_URLS[cfg.provider]).replace(/\/+$/, "");
   return { cfg };
+}
+
+// Merge partial config from the panel into chat.json (0600). api_key is
+// optional: omitting it keeps the stored one, so a model change doesn't
+// force re-pasting the key.
+function saveConfig(partial) {
+  let existing = {};
+  try {
+    existing = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+  } catch {}
+  const merged = { ...existing };
+  for (const key of ["provider", "base_url", "api_key", "model", "effort"]) {
+    const v = partial?.[key];
+    if (typeof v === "string" && v !== "") merged[key] = v;
+    if (key === "base_url" && v === "") delete merged.base_url;
+  }
+  const parsed = ConfigSchema.safeParse(merged);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "?"}: ${i.message}`)
+      .join("; ");
+    return { error: `invalid config — ${issues}` };
+  }
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
+  writeFileSync(CONFIG_FILE, JSON.stringify(parsed.data, null, 2) + "\n", { mode: 0o600 });
+  return { cfg: parsed.data };
+}
+
+// Zero-data-retention notes by provider host. It is a provider policy, not a
+// model property: the panel shows it next to the provider picker so a user
+// booking a flight knows where their data goes before typing.
+const PRIVACY_NOTES = [
+  { match: "anthropic.com", trains: false, note: "Anthropic does not train on API inputs" },
+  { match: "api.openai.com", trains: false, note: "OpenAI does not train on API data (30-day abuse retention)" },
+  { match: "openrouter.ai", trains: "depends", note: "OpenRouter forwards to downstream providers; each has its own data policy" },
+  { match: "generativelanguage.googleapis.com", trains: "free_tier", note: "Google trains on free-tier Gemini API data; the paid tier does not" },
+  { match: "api.groq.com", trains: false, note: "Groq does not train on API data" },
+  { match: "deepseek.com", trains: false, note: "DeepSeek does not train on API data" },
+  { match: "localhost", trains: false, note: "local model: nothing leaves this machine" },
+  { match: "127.0.0.1", trains: false, note: "local model: nothing leaves this machine" },
+  { match: "ollama", trains: false, note: "local model: nothing leaves this machine" },
+];
+
+function privacyFor(baseUrl) {
+  const hit = PRIVACY_NOTES.find((p) => baseUrl.includes(p.match));
+  return hit ?? { trains: "unknown", note: "unknown provider: check its data policy before pasting sensitive data" };
+}
+
+// GET {base}/models and normalize; free models first so the cheap option is
+// the visible one. Falls back to an empty list: the panel still lets the user
+// type a model by hand.
+async function listModels(cfg) {
+  const headers =
+    cfg.provider === "anthropic"
+      ? { "x-api-key": cfg.api_key, "anthropic-version": "2023-06-01" }
+      : cfg.api_key
+        ? { authorization: `Bearer ${cfg.api_key}` }
+        : {};
+  const res = await fetch(`${cfg.base_url}/models`, {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`models ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  const rows = Array.isArray(body?.data) ? body.data : [];
+  const local = /localhost|127\.0\.0\.1|ollama/.test(cfg.base_url);
+  const models = rows
+    .map((r) => {
+      const id = typeof r.id === "string" ? r.id : null;
+      if (!id) return null;
+      const pricingFree =
+        r.pricing && Number(r.pricing.prompt) === 0 && Number(r.pricing.completion) === 0;
+      const free = local || pricingFree || /:free$/i.test(id);
+      return { id, label: r.display_name || r.name || id, free };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.free) - Number(a.free) || a.label.localeCompare(b.label));
+  return models;
 }
 
 // Proyección JSON-schema del subset de zod que usa TOOLS. Un tipo nuevo que
@@ -220,7 +302,10 @@ async function* streamAnthropic(cfg, messages, signal) {
     },
     body: JSON.stringify({
       model: cfg.model,
-      max_tokens: cfg.max_tokens ?? 8192,
+      max_tokens: Math.max(
+        cfg.max_tokens ?? 8192,
+        (EFFORT_BUDGET[cfg.effort] ?? 0) + 4096
+      ),
       system: SYSTEM_PROMPT,
       messages: anthropicMessages(messages),
       tools: TOOL_SCHEMAS.map((t) => ({
@@ -228,6 +313,9 @@ async function* streamAnthropic(cfg, messages, signal) {
         description: t.description,
         input_schema: t.parameters,
       })),
+      ...(EFFORT_BUDGET[cfg.effort]
+        ? { thinking: { type: "enabled", budget_tokens: EFFORT_BUDGET[cfg.effort] } }
+        : {}),
       stream: true,
     }),
     signal,
@@ -304,6 +392,7 @@ async function* streamOpenAI(cfg, messages, signal) {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
+      ...(cfg.effort && cfg.effort !== "off" ? { reasoning_effort: cfg.effort } : {}),
       stream: true,
     }),
     signal,
@@ -399,7 +488,73 @@ export class ChatSession {
       // sin id: cancelar lo que corra (el panel se cerró); con id: solo ese turno
       const wants = msg.chat_cancel.id;
       if (this.busy && (wants === undefined || wants === this.turnId)) this.abort?.abort();
+      return;
     }
+    if (msg?.chat_models && typeof msg.chat_models === "object") {
+      void this.sendModels(msg.chat_models);
+      return;
+    }
+    if (msg?.chat_config && typeof msg.chat_config === "object") {
+      void this.saveCfg(msg.chat_config);
+    }
+  }
+
+  // Lista de modelos para el dropdown del panel. Acepta overrides sin
+  // persistir: la key que el usuario acaba de teclear viaja por este socket
+  // autenticado y solo se escribe a disco si después guarda la config.
+  async sendModels(req) {
+    let file = {};
+    try {
+      file = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+    } catch {}
+    const provider = req.provider || file.provider;
+    const apiKey = req.api_key || file.api_key;
+    const baseUrl = (req.base_url || file.base_url || BASE_URLS[provider] || "")
+      .replace(/\/+$/, "");
+    const configured = {
+      provider: file.provider ?? null,
+      base_url: file.base_url ?? null,
+      model: file.model ?? null,
+      effort: file.effort ?? null,
+      has_key: typeof file.api_key === "string" && file.api_key.length > 0,
+    };
+    // localhost no pide key: Ollama/Open-WebUI/etc. corren sin auth
+    const local = /localhost|127\.0\.0\.1|ollama/i.test(baseUrl);
+    if (!provider || (!apiKey && !local)) {
+      this.emit({
+        chat_models: { models: [], configured, error: "chat_not_configured: provider and api_key required" },
+      });
+      return;
+    }
+    try {
+      const models = await listModels({ provider, base_url: baseUrl, api_key: apiKey });
+      this.emit({
+        chat_models: { models, configured, privacy: privacyFor(baseUrl) },
+      });
+    } catch (e) {
+      const scrubbed = String(e?.message ?? e).split(apiKey).join("[redacted]");
+      this.emit({ chat_models: { models: [], configured, error: scrubbed } });
+    }
+  }
+
+  async saveCfg(req) {
+    const { cfg, error } = saveConfig(req);
+    if (error) {
+      this.emit({ chat_error: { id: null, message: `chat_not_configured: ${error}` } });
+      return;
+    }
+    const base = (cfg.base_url || BASE_URLS[cfg.provider]).replace(/\/+$/, "");
+    this.emit({
+      chat_config: {
+        ok: true,
+        provider: cfg.provider,
+        base_url: cfg.base_url ?? null,
+        model: cfg.model,
+        effort: cfg.effort ?? null,
+        has_key: true,
+        privacy: privacyFor(base),
+      },
+    });
   }
 
   askConfirm(id, name, args) {
@@ -530,3 +685,6 @@ export class ChatSession {
     this.confirms.clear();
   }
 }
+
+// exportados para tests unitarios del sort/metadatos (sin tocar el WS)
+export { listModels, privacyFor };

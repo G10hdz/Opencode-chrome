@@ -1,13 +1,14 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { listModels, privacyFor } from '../src/chat.js';
 
 const INDEX = fileURLToPath(new URL('../src/index.js', import.meta.url));
 const BRIDGE_TOKEN = 'itest-chat-token';
@@ -432,4 +433,195 @@ test('anthropic provider maps tools and merges tool results in one user message'
   ext.send({ chat: { id: 7, text: 'tabs?' } });
   const done = await ext.next(isChat('chat_done'));
   assert.equal(done.chat_done.id, 7);
+});
+
+test('chat_config writes chat.json 0600 and keeps the stored key on partial updates', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({
+    chat_config: {
+      provider: 'openai',
+      base_url: 'http://127.0.0.1:1/v1',
+      api_key: API_KEY,
+      model: 'm1',
+      effort: 'low',
+    },
+  });
+  const ok = await ext.next(isChat('chat_config'));
+  assert.equal(ok.chat_config.ok, true);
+  assert.equal(ok.chat_config.model, 'm1');
+  assert.equal(statSync(chatFile).mode & 0o777, 0o600);
+  const saved = JSON.parse(readFileSync(chatFile, 'utf8'));
+  assert.equal(saved.api_key, API_KEY);
+  assert.equal(saved.effort, 'low');
+  // segundo save sin key: solo cambia el modelo
+  ext.send({ chat_config: { model: 'm2' } });
+  const ok2 = await ext.next((m) => m.chat_config?.model === 'm2');
+  assert.equal(ok2.chat_config.ok, true);
+  const saved2 = JSON.parse(readFileSync(chatFile, 'utf8'));
+  assert.equal(saved2.model, 'm2');
+  assert.equal(saved2.api_key, API_KEY, 'stored key must survive a partial update');
+  assert.ok(!JSON.stringify(ext.frames).includes(API_KEY), 'api key must never echo over WS');
+});
+
+test('chat_config with missing key on a fresh file is rejected', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat_config: { provider: 'openai', model: 'm1' } });
+  const err = await ext.next(isChat('chat_error'));
+  assert.match(err.chat_error.message, /chat_not_configured/);
+});
+
+test('chat_models lists models free-first with a privacy note', async (t) => {
+  const provider = await fakeProvider(t, [
+    (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: 'zeta', name: 'Zeta' },
+            { id: 'alpha', name: 'Alpha' },
+          ],
+        })
+      );
+    },
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  writeFileSync(
+    chatFile,
+    JSON.stringify({
+      provider: 'openai',
+      base_url: `http://127.0.0.1:${provider.port}`,
+      api_key: API_KEY,
+      model: 'alpha',
+    })
+  );
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat_models: {} });
+  const reply = await ext.next(isChat('chat_models'));
+  // base local => todo se marca free; el tie-break es orden alfabético
+  assert.deepEqual(
+    reply.chat_models.models.map((m) => m.id),
+    ['alpha', 'zeta']
+  );
+  assert.ok(reply.chat_models.models.every((m) => m.free));
+  assert.match(reply.chat_models.privacy.note, /local/);
+  assert.equal(reply.chat_models.configured.model, 'alpha');
+  assert.equal(reply.chat_models.configured.has_key, true);
+  assert.ok(!JSON.stringify(reply).includes(API_KEY), 'api key must not appear in chat_models');
+});
+
+test('chat_models without any config reports chat_not_configured', async (t) => {
+  const { port } = await startServe(t);
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat_models: {} });
+  const reply = await ext.next(isChat('chat_models'));
+  assert.match(reply.chat_models.error, /chat_not_configured/);
+});
+
+test('effort maps to reasoning_effort in the openai request', async (t) => {
+  const provider = await fakeProvider(t, [
+    (req, res) => {
+      assert.equal(req.body.reasoning_effort, 'high');
+      sse(res, oaiText('ok'));
+    },
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  writeFileSync(
+    chatFile,
+    JSON.stringify({
+      provider: 'openai',
+      base_url: `http://127.0.0.1:${provider.port}`,
+      api_key: API_KEY,
+      model: 'fake',
+      effort: 'high',
+    })
+  );
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat: { id: 8, text: 'hi' } });
+  await ext.next(isChat('chat_done'));
+});
+
+test('effort maps to a thinking budget in the anthropic request', async (t) => {
+  const provider = await fakeProvider(t, [
+    (req, res) => {
+      assert.deepEqual(req.body.thinking, { type: 'enabled', budget_tokens: 1024 });
+      assert.ok(req.body.max_tokens >= 5120);
+      sse(res, [
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_stop' },
+      ]);
+    },
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'oc-chat-'));
+  const chatFile = join(dir, 'chat.json');
+  writeFileSync(
+    chatFile,
+    JSON.stringify({
+      provider: 'anthropic',
+      base_url: `http://127.0.0.1:${provider.port}`,
+      api_key: API_KEY,
+      model: 'claude-fake',
+      effort: 'low',
+    })
+  );
+  const { port } = await startServe(t, { OPENCODE_CHROME_CHAT: chatFile });
+  const ext = await connectChat(port);
+  t.after(() => ext.ws.close());
+  ext.send({ chat: { id: 9, text: 'hi' } });
+  await ext.next(isChat('chat_done'));
+});
+
+test('listModels puts free models first (unit)', async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          { id: 'paid-a', pricing: { prompt: '1', completion: '1' } },
+          { id: 'zfree', pricing: { prompt: '0', completion: '0' } },
+          { id: 'suffix:free', pricing: { prompt: '9', completion: '9' } },
+          { id: 'afree', pricing: { prompt: '0', completion: '0' } },
+        ],
+      }),
+      { status: 200 }
+    );
+  const models = await listModels({
+    provider: 'openai',
+    base_url: 'https://api.example.test/v1',
+    api_key: 'k',
+  });
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ['afree', 'suffix:free', 'zfree', 'paid-a']
+  );
+  assert.ok(models[0].free && models[1].free && models[2].free);
+  assert.ok(!models[3].free);
+});
+
+test('privacyFor flags known hosts and defaults to unknown (unit)', () => {
+  assert.equal(privacyFor('https://api.anthropic.com').trains, false);
+  assert.equal(privacyFor('https://api.openai.com/v1').trains, false);
+  assert.equal(privacyFor('https://openrouter.ai/api/v1').trains, 'depends');
+  assert.equal(privacyFor('https://generativelanguage.googleapis.com').trains, 'free_tier');
+  assert.equal(privacyFor('http://localhost:11434/v1').trains, false);
+  assert.equal(privacyFor('https://random.example.test').trains, 'unknown');
 });

@@ -130,8 +130,19 @@ MCP client running. The key lives in the bridge, never in the extension:
 ```
 
 `provider` is `anthropic` or `openai` (any OpenAI-compatible endpoint: set
-`base_url` for OpenRouter, Ollama, Groq, etc.). Optional: `max_turns`,
-`max_minutes`, `max_tokens`. Env override: `OPENCODE_CHROME_CHAT`.
+`base_url` for OpenRouter, Ollama, Groq, etc.). Optional: `effort`
+(`off|low|medium|high` → `reasoning_effort` / Anthropic `thinking`
+budget), `max_turns`, `max_minutes`, `max_tokens`. Env override:
+`OPENCODE_CHROME_CHAT`.
+
+You can also configure it from the panel itself: the gear opens a form
+with provider, key, optional base URL, a model picker (loaded from the
+provider's `/models`, free models first), and an effort selector. The
+key travels only over the authenticated socket and is written to
+`chat.json` — it never lands in extension storage. The form also shows a
+data-retention note for the endpoint (no training / conditional /
+free-tier trains / local / unknown), worth a look before pasting
+passenger or payment data.
 
 Run `opencode-chrome --serve` for a chat-only bridge (no MCP stdio); the
 normal MCP-spawned bridge serves chat too. Attaching a tab opens the
@@ -312,10 +323,15 @@ El mismo comando sirve para otro cliente MCP local. Cuántas sesiones corren a l
 
 Chat opcional en el panel lateral: configurá
 `~/.config/opencode-chrome/chat.json` (provider `anthropic` u `openai`,
-api_key, model) y corré `opencode-chrome --serve` o el puente MCP de
-siempre. Al adjuntar un tab se abre el panel; las lecturas corren directo
-y cada mutación pide aprobación ahí mismo. La key queda en el puente, no
-en la extensión.
+api_key, model, `effort` opcional) o abrí el engranaje del panel y
+llená el form: provider, key, URL base opcional, selector de modelo
+(ordenado gratis primero) y effort. La key viaja solo por el socket
+autenticado hasta `chat.json`; nunca queda en la extensión. El form
+también muestra la política de retención del endpoint (no entrena /
+condicional / gratis entrena / local / desconocida). Corré
+`opencode-chrome --serve` o el puente MCP de siempre. Al adjuntar un
+tab se abre el panel; las lecturas corren directo y cada mutación pide
+aprobación ahí mismo.
 
 Herramientas, notas de seguridad, solución de problemas y desarrollo: ver
 sección en inglés arriba (mismo contenido). Para contribuir:
